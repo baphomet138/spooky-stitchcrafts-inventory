@@ -50,6 +50,7 @@
   .capture{display:block;margin:8px 12px 0;padding:12px;font-size:16px;font-weight:700;border:0;border-radius:8px;background:var(--accent);color:#fff;width:calc(100% - 24px)}
   .capture:disabled{opacity:.45}
   .capture.ready{background:var(--ok);animation:pulse 1s infinite}
+  .capture.paused{background:var(--gold);color:#1a1206;animation:pulse 1s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}
   .submit{width:100%;margin-top:10px;padding:12px;font-size:16px;font-weight:700;border:0;border-radius:8px;background:var(--gold);color:#1a1206}
   .submit:disabled{opacity:.5}
@@ -109,6 +110,7 @@
   <div id="focusRing" class="focus-ring"></div>
 </div>
 <button id="capture" class="capture">📷 Scan</button>
+<button id="autoCtrl" class="capture" hidden>⏸ Pause</button>
 <div class="hint" id="camHint">Frame the QR you want, then tap “Scan”.</div>
 
 <div class="panel">
@@ -206,8 +208,8 @@ async function startScanner(){
         if(codes.length){
           const val = codes[0].rawValue.trim(), now = Date.now();
           if(scanMode==='auto'){
-            if(val && (val!==lastCode || now-lastAt>2500)){
-              lastCode=val; lastAt=now; onScan(val);
+            if(!autoPaused && val && (val!==lastCode || now-lastAt>2500)){
+              lastCode=val; lastAt=now; onScan(val); pauseAuto(true);   // scan once, then pause
             }
           } else {
             // Tap mode: just remember what's in view; user presses Scan to capture.
@@ -362,13 +364,39 @@ $('zoom').addEventListener('input', e=>{ const val=e.target.value; clearTimeout(
 $('zoomIn').onclick  = ()=>applyZoom(Number($('zoom').value) + Number($('zoom').step||0.1) * 5);
 $('zoomOut').onclick = ()=>applyZoom(Number($('zoom').value) - Number($('zoom').step||0.1) * 5);
 
+/* ---- Auto-mode pause/resume (scan once, then wait) ---- */
+const AUTO_PAUSE_SECS = 30;
+let autoPaused = false, autoTimer = null, autoTick = null;
+function clearAutoTimers(){ clearTimeout(autoTimer); clearInterval(autoTick); autoTimer = autoTick = null; }
+function pauseAuto(fromScan){
+  autoPaused = true; clearAutoTimers();
+  const b = $('autoCtrl'); b.classList.add('paused');
+  if(fromScan){
+    let left = AUTO_PAUSE_SECS;
+    const render = ()=>{ b.textContent = '▶️ Ready to scan ('+left+'s)'; };
+    render();
+    autoTick  = setInterval(()=>{ left--; if(left<=0) resumeAuto(); else render(); }, 1000);
+    autoTimer = setTimeout(resumeAuto, AUTO_PAUSE_SECS*1000);   // auto-resume after 30s
+  } else {
+    b.textContent = '▶️ Paused — tap to resume';                // manual pause: waits for tap
+  }
+}
+function resumeAuto(){
+  autoPaused = false; clearAutoTimers();
+  lastCode = ''; lastAt = 0;                                    // allow the next item to scan
+  const b = $('autoCtrl'); b.classList.remove('paused'); b.textContent = '⏸ Pause';
+}
+$('autoCtrl').onclick = ()=>{ autoPaused ? resumeAuto() : pauseAuto(false); };
+
 /* ---- Scan mode: Tap (default) vs Auto ---- */
 let scanMode = 'tap', pendingCode = '';
 function setScanMode(m){ scanMode = m;
   $('scanmode').textContent = m==='tap' ? '🖐️ Tap to Scan' : '⚡ Auto Scan';
   $('capture').hidden = (m!=='tap');
-  $('camHint').textContent = (m==='tap' ? 'Frame the QR, then tap “Scan”.' : 'Auto: hold over a QR to scan it.') + ' Tap the image to focus.';
+  $('autoCtrl').hidden = (m!=='auto');
+  $('camHint').textContent = (m==='tap' ? 'Frame the QR, then tap “Scan”.' : 'Auto: scans one item, then pauses — tap Ready for the next.') + ' Tap the image to focus.';
   pendingCode=''; $('capture').disabled=true; $('capture').classList.remove('ready'); $('capture').textContent='📷 Scan';
+  if(m==='auto') resumeAuto(); else { autoPaused=false; clearAutoTimers(); }
   savePrefs();
 }
 $('scanmode').onclick = ()=> setScanMode(scanMode==='tap' ? 'auto' : 'tap');
