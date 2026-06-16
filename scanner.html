@@ -374,8 +374,23 @@ function setScanMode(m){ scanMode = m;
 $('scanmode').onclick = ()=> setScanMode(scanMode==='tap' ? 'auto' : 'tap');
 $('capture').onclick = ()=>{ if(pendingCode) onScan(pendingCode); };
 
-function beep(){ try{ const a=new (window.AudioContext||window.webkitAudioContext)(); const o=a.createOscillator();
-  o.connect(a.destination); o.frequency.value=880; o.start(); setTimeout(()=>{o.stop();a.close();},90);}catch(_){ } }
+/* ---- Scan beep (one shared AudioContext, unlocked on first touch) ---- */
+let audioCtx = null;
+function ensureAudio(){
+  if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(_){ return null; } }
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+document.addEventListener('pointerdown', ensureAudio);   // satisfy autoplay policy
+function beep(){
+  const a = ensureAudio(); if(!a) return;
+  try{
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = 'square'; o.frequency.value = 880; g.gain.value = 0.18;
+    o.connect(g); g.connect(a.destination);
+    o.start(); o.stop(a.currentTime + 0.12);
+  }catch(_){ }
+}
 
 function onScan(sku){
   beep(); if(navigator.vibrate) navigator.vibrate(40);
