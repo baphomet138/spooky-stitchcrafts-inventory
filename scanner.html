@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Spooky Stitchcrafts — Inventory Scanner</title>
+<style>
+  :root{--bg:#0e0b14;--card:#1a1424;--accent:#8b3cf7;--gold:#d9a441;--ok:#3c6;--bad:#e25563;--text:#ece6f5;--muted:#9b8fb0}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif}
+  header{padding:14px 16px;background:#160f22;border-bottom:1px solid #2a2138;display:flex;align-items:center;gap:10px}
+  header h1{font-size:16px;margin:0;font-weight:700}
+  .modes{display:flex;margin:12px 16px;border:1px solid #2a2138;border-radius:10px;overflow:hidden}
+  .modes button{flex:1;padding:12px;background:var(--card);color:var(--muted);border:0;font-size:15px;font-weight:600}
+  .modes button.on{background:var(--accent);color:#fff}
+  #video{width:100%;max-height:46vh;object-fit:cover;background:#000;display:block}
+  .scanbox{margin:0 16px}
+  .panel{margin:12px 16px;background:var(--card);border:1px solid #2a2138;border-radius:12px;padding:14px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  input{width:100%;padding:12px;font-size:18px;background:#0e0b14;border:1px solid #2a2138;border-radius:8px;color:var(--text)}
+  .qtyrow{display:flex;gap:10px;align-items:center;margin-top:12px}
+  .qtyrow button{width:54px;height:54px;font-size:26px;border-radius:10px;border:1px solid #2a2138;background:#0e0b14;color:var(--text)}
+  .qtyrow input{text-align:center;font-size:24px}
+  .submit{width:100%;margin-top:14px;padding:16px;font-size:18px;font-weight:700;border:0;border-radius:10px;background:var(--gold);color:#1a1206}
+  .submit:disabled{opacity:.5}
+  .log{margin:12px 16px 40px}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:8px;background:var(--card);border-left:4px solid #2a2138;margin-bottom:8px;font-size:14px}
+  .row.ok{border-left-color:var(--ok)} .row.bad{border-left-color:var(--bad)}
+  .row .q{color:var(--muted);font-size:12px}
+  .hint{color:var(--muted);font-size:12px;margin:6px 16px}
+  .err{color:var(--bad)}
+  .preview{display:flex;flex-direction:column;align-items:center;margin-bottom:12px}
+  #pvImg{width:120px;height:120px;object-fit:contain;background:#fff;border-radius:10px;display:none}
+  .pvName{font-size:15px;font-weight:600;text-align:center;margin-top:8px;min-height:20px}
+  .pvName.unknown{color:var(--bad)}
+</style>
+</head>
+<body>
+<header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1></header>
+
+<div class="modes">
+  <button id="mReceive" class="on">📥 Receiving (+)</button>
+  <button id="mCount">🔢 Count (set)</button>
+</div>
+
+<video id="video" playsinline muted></video>
+<div class="hint" id="camHint">Point the camera at a label QR code…</div>
+
+<div class="panel">
+  <div id="preview" class="preview">
+    <img id="pvImg" alt="">
+    <div id="pvName" class="pvName">Scan or type a SKU…</div>
+  </div>
+  <label>SKU</label>
+  <input id="sku" placeholder="scan or type SKU" autocomplete="off">
+  <div class="qtyrow">
+    <button id="minus">−</button>
+    <input id="qty" type="number" inputmode="numeric" value="1">
+    <button id="plus">+</button>
+  </div>
+  <button class="submit" id="submit">Submit</button>
+  <div class="hint" id="status"></div>
+</div>
+
+<div class="log" id="log"></div>
+
+<script>
+/* ===== CONFIG — paste these two after deploying Code.gs ===== */
+const APPS_SCRIPT_URL = 'PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE';
+const SHARED_SECRET   = 'change-me-to-a-long-random-string'; // must match Code.gs
+/* =========================================================== */
+
+let mode = 'receive';
+const $ = id => document.getElementById(id);
+
+/* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
+let SKU_MAP = {}, IMG_BASE = '';
+fetch('sku-map.json').then(r=>r.json()).then(d=>{ SKU_MAP = d.map||{}; IMG_BASE = d._base||''; })
+  .catch(()=>{ $('pvName').textContent = '(sku-map.json not found — image preview off)'; });
+function showPreview(sku){
+  const rec = SKU_MAP[sku];
+  const img = $('pvImg'), name = $('pvName');
+  if(rec){
+    img.src = IMG_BASE + rec[1]; img.style.display='block';
+    name.textContent = rec[0]; name.className='pvName';
+  } else {
+    img.style.display='none';
+    name.textContent = sku ? 'Unknown SKU: '+sku : 'Scan or type a SKU…';
+    name.className = 'pvName'+(sku?' unknown':'');
+  }
+}
+function setMode(m){ mode = m;
+  $('mReceive').classList.toggle('on', m==='receive');
+  $('mCount').classList.toggle('on', m==='count');
+  $('qty').value = m==='receive' ? 1 : 0;
+}
+$('mReceive').onclick = ()=>setMode('receive');
+$('mCount').onclick   = ()=>setMode('count');
+$('plus').onclick  = ()=>$('qty').value = (parseInt($('qty').value||0)+1);
+$('minus').onclick = ()=>$('qty').value = Math.max(0, parseInt($('qty').value||0)-1);
+
+/* ---- Camera scanning via BarcodeDetector (Chrome on Android) ---- */
+let lastCode = '', lastAt = 0;
+async function startScanner(){
+  if(!('BarcodeDetector' in window)){
+    $('camHint').innerHTML = '<span class="err">This browser can\'t scan with the camera. Use Chrome on Android, or type the SKU.</span>';
+    $('video').style.display='none'; return;
+  }
+  try{
+    const detector = new BarcodeDetector({ formats:['qr_code','data_matrix','code_128','ean_13','code_39'] });
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    const v = $('video'); v.srcObject = stream; await v.play();
+    const tick = async ()=>{
+      try{
+        const codes = await detector.detect(v);
+        if(codes.length){
+          const val = codes[0].rawValue.trim(), now = Date.now();
+          if(val && (val!==lastCode || now-lastAt>2500)){
+            lastCode=val; lastAt=now; onScan(val);
+          }
+        }
+      }catch(_){}
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }catch(err){
+    $('camHint').innerHTML = '<span class="err">Camera blocked: '+err.message+'. Type the SKU instead.</span>';
+  }
+}
+function beep(){ try{ const a=new (window.AudioContext||window.webkitAudioContext)(); const o=a.createOscillator();
+  o.connect(a.destination); o.frequency.value=880; o.start(); setTimeout(()=>{o.stop();a.close();},90);}catch(_){ } }
+
+function onScan(sku){
+  beep(); if(navigator.vibrate) navigator.vibrate(40);
+  $('sku').value = sku;
+  showPreview(sku);
+  if(mode==='receive') submit();        // receiving: auto-add on each scan
+  else $('qty').focus();                 // count: let them type the number
+}
+
+async function submit(){
+  const sku = $('sku').value.trim(); const qty = parseInt($('qty').value);
+  if(!sku){ status('Enter or scan a SKU', true); return; }
+  if(isNaN(qty)){ status('Enter a quantity', true); return; }
+  $('submit').disabled = true; status('Saving…');
+  try{
+    const r = await fetch(APPS_SCRIPT_URL, {
+      method:'POST',
+      headers:{ 'Content-Type':'text/plain;charset=utf-8' }, // text/plain avoids CORS preflight
+      body: JSON.stringify({ sku, qty, mode, secret: SHARED_SECRET })
+    });
+    const d = await r.json();
+    if(d.ok){
+      logRow(true, sku, (mode==='receive'?'+':'set ')+d.qty, '#'+d.loggedRows);
+      status('Logged ('+d.loggedRows+' total rows)');
+      if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
+    } else { logRow(false, sku, '—', d.error); status(d.error, true); }
+  }catch(err){ logRow(false,'Network error',sku,String(err)); status(String(err), true); }
+  $('submit').disabled = false;
+}
+$('submit').onclick = submit;
+$('sku').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
+$('sku').addEventListener('input', e=>{ showPreview(e.target.value.trim()); });
+
+function status(msg, bad){ const s=$('status'); s.textContent=msg; s.className = 'hint'+(bad?' err':''); }
+function logRow(ok, sku, qty, note){
+  const d=document.createElement('div'); d.className='row '+(ok?'ok':'bad');
+  d.innerHTML='<div><div>'+qty+'</div><div class="q">'+sku+'</div></div><div class="q">'+note+'</div>';
+  $('log').prepend(d);
+}
+setMode('receive');
+startScanner();
+</script>
+</body>
+</html>
