@@ -96,6 +96,14 @@
       <button id="zoomIn" class="zbtn" aria-label="Zoom in">+</button>
     </div>
   </div>
+  <div id="waitWrap">
+    <div class="zoomlabel"><span>⏱️ Auto wait</span><span id="waitVal">30s</span></div>
+    <div class="zoomrow">
+      <button id="waitDown" class="zbtn" aria-label="Less wait">−</button>
+      <input id="waitSlider" type="range" min="5" max="120" step="5" value="30" aria-label="Auto wait seconds">
+      <button id="waitUp" class="zbtn" aria-label="More wait">+</button>
+    </div>
+  </div>
 </aside>
 
 <aside id="drawerMode" class="drawer right">
@@ -143,7 +151,7 @@ const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.g
 const $ = id => document.getElementById(id);
 /* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
 const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
-function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value })); }catch(_){ } }
+function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
@@ -365,7 +373,16 @@ $('zoomIn').onclick  = ()=>applyZoom(Number($('zoom').value) + Number($('zoom').
 $('zoomOut').onclick = ()=>applyZoom(Number($('zoom').value) - Number($('zoom').step||0.1) * 5);
 
 /* ---- Auto-mode pause/resume (scan once, then wait) ---- */
-const AUTO_PAUSE_SECS = 30;
+let AUTO_PAUSE_SECS = Number(PREF.autoWait) || 30;
+function setAutoWait(s){
+  s = Math.min(120, Math.max(5, Math.round(Number(s)/5)*5));
+  AUTO_PAUSE_SECS = s;
+  $('waitSlider').value = s; $('waitVal').textContent = s+'s';
+  savePrefs();
+}
+$('waitSlider').addEventListener('input', e=>setAutoWait(e.target.value));
+$('waitUp').onclick   = ()=>setAutoWait(AUTO_PAUSE_SECS + 5);
+$('waitDown').onclick = ()=>setAutoWait(AUTO_PAUSE_SECS - 5);
 let autoPaused = false, autoTimer = null, autoTick = null;
 function clearAutoTimers(){ clearTimeout(autoTimer); clearInterval(autoTick); autoTimer = autoTick = null; }
 function pauseAuto(fromScan){
@@ -507,6 +524,7 @@ function logRow(ok, sku, qty, note){
 
 /* ---- Init from saved preferences ---- */
 $('bin').value = PREF.bin || '';
+setAutoWait(AUTO_PAUSE_SECS);        // sync slider/label to saved wait time
 setMode(mode);                      // mode already = PREF.mode || 'receive'
 setScanMode(PREF.scanMode || 'tap');
 updateQueueBadge();
