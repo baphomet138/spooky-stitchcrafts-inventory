@@ -21,9 +21,23 @@
   .draw-btn{padding:12px;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text);font-size:14px;font-weight:600;text-align:left}
   .draw-btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
   .drawer .ctl{flex:none;width:100%;margin:0;padding:12px;font-size:14px;text-align:left}
+  .zoomlabel{display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .zoomlabel #zoomVal{color:var(--gold)}
+  .zoomrow{display:flex;align-items:center;gap:8px}
+  .zoomrow input{flex:1;min-width:0}
+  .zbtn{width:40px;height:40px;flex:none;font-size:22px;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
   .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:30;opacity:0;pointer-events:none;transition:opacity .25s}
   .backdrop.show{opacity:1;pointer-events:auto}
-  #video{width:100%;max-height:32vh;object-fit:cover;background:#000;display:block;margin-top:8px}
+  .camwrap{position:relative;margin-top:8px;line-height:0}
+  #video{width:100%;max-height:32vh;object-fit:cover;background:#000;display:block}
+  .focus-ring{position:absolute;width:60px;height:60px;margin:-30px 0 0 -30px;border:2px solid var(--gold);border-radius:50%;box-sizing:border-box;pointer-events:none;opacity:0;transform:scale(1.3);transition:opacity .12s,transform .12s}
+  .focus-ring.show{opacity:1;transform:scale(1)}
+  .align{position:absolute;top:50%;left:50%;width:60%;aspect-ratio:1/1;transform:translate(-50%,-50%);pointer-events:none}
+  .align span{position:absolute;width:18px;height:18px;border:3px solid var(--gold)}
+  .align .tl{top:0;left:0;border-right:0;border-bottom:0;border-radius:6px 0 0 0}
+  .align .tr{top:0;right:0;border-left:0;border-bottom:0;border-radius:0 6px 0 0}
+  .align .bl{bottom:0;left:0;border-right:0;border-top:0;border-radius:0 0 0 6px}
+  .align .br{bottom:0;right:0;border-left:0;border-top:0;border-radius:0 0 6px 0}
   .controls{display:flex;gap:8px;margin:8px 12px 0}
   .ctl{flex:1;padding:8px;font-size:12px;font-weight:600;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
   .ctl.on{background:var(--gold);color:#1a1206;border-color:var(--gold)}
@@ -49,10 +63,21 @@
   #pvImg{width:48px;height:48px;object-fit:contain;background:#fff;border-radius:6px;display:none;flex:none}
   .pvName{font-size:13px;font-weight:600;min-height:16px}
   .pvName.unknown{color:var(--bad)}
+  .sess{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+  .qbadge{font-size:11px;font-weight:700;color:#1a1206;background:var(--gold);padding:2px 8px;border-radius:10px;white-space:nowrap}
+  .flash{position:fixed;inset:0;background:var(--ok);opacity:0;pointer-events:none;z-index:40;transition:opacity .12s}
+  .flash.show{opacity:.4}
+  .undo{width:100%;margin-top:10px;padding:10px;font-size:14px;font-weight:600;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
+  .undo:disabled{opacity:.5}
+  .row.queued{border-left-color:var(--gold)} .row.undo{border-left-color:var(--muted)}
 </style>
 </head>
 <body>
-<header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1></header>
+<header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1>
+  <span id="queueBadge" class="qbadge" hidden>0 queued</span>
+  <span id="sessCount" class="sess">0 scanned</span>
+</header>
+<div id="flash" class="flash"></div>
 
 <button id="hTools" class="handle left" aria-label="Open tools">🔦</button>
 <button id="hMode" class="handle right" aria-label="Open mode">📥</button>
@@ -62,6 +87,14 @@
   <div class="drawer-title">Tools</div>
   <button id="torch" class="ctl" hidden>🔦 Light: Off</button>
   <button id="scanmode" class="ctl">🖐️ Tap to Scan</button>
+  <div id="zoomWrap" hidden>
+    <div class="zoomlabel"><span>🔎 Zoom</span><span id="zoomVal">1.0×</span></div>
+    <div class="zoomrow">
+      <button id="zoomOut" class="zbtn" aria-label="Zoom out">−</button>
+      <input id="zoom" type="range" aria-label="Zoom">
+      <button id="zoomIn" class="zbtn" aria-label="Zoom in">+</button>
+    </div>
+  </div>
 </aside>
 
 <aside id="drawerMode" class="drawer right">
@@ -70,7 +103,11 @@
   <button id="mCount" class="draw-btn">🔢 Count (set)</button>
 </aside>
 
-<video id="video" playsinline muted></video>
+<div class="camwrap">
+  <video id="video" playsinline muted></video>
+  <div class="align"><span class="tl"></span><span class="tr"></span><span class="bl"></span><span class="br"></span></div>
+  <div id="focusRing" class="focus-ring"></div>
+</div>
 <button id="capture" class="capture">📷 Scan</button>
 <div class="hint" id="camHint">Frame the QR you want, then tap “Scan”.</div>
 
@@ -86,8 +123,11 @@
     <input id="qty" type="number" inputmode="numeric" value="1">
     <button id="plus">+</button>
   </div>
+  <label for="bin" style="margin-top:8px">Bin / Location (optional)</label>
+  <input id="bin" placeholder="e.g. A-03" autocomplete="off">
   <button class="submit" id="submit">Submit</button>
   <div class="hint" id="status"></div>
+  <button id="undo" class="undo" hidden>↩︎ Undo last scan</button>
 </div>
 
 <div class="log" id="log"></div>
@@ -98,8 +138,11 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz9zQJZDpnKnCmk
 const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.gs
 /* =========================================================== */
 
-let mode = 'receive';
 const $ = id => document.getElementById(id);
+/* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
+const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
+function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value })); }catch(_){ } }
+let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
 let SKU_MAP = {}, IMG_BASE = '';
@@ -122,6 +165,7 @@ function setMode(m){ mode = m;
   $('mCount').classList.toggle('on', m==='count');
   $('qty').value = m==='receive' ? 1 : 0;
   $('hMode').textContent = m==='receive' ? '📥' : '🔢';   // tab reflects current mode
+  savePrefs();
 }
 $('mReceive').onclick = ()=>{ setMode('receive'); closeDrawers(); };
 $('mCount').onclick   = ()=>{ setMode('count');   closeDrawers(); };
@@ -151,6 +195,9 @@ async function startScanner(){
     const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
     const v = $('video'); v.srcObject = stream; await v.play();
     setupTorch(stream);
+    setupFocus(stream);
+    setupZoom(stream);
+    keepAwake();
     const tick = async ()=>{
       try{
         const codes = await detector.detect(v);
@@ -197,17 +244,94 @@ async function toggleTorch(){
 }
 $('torch').onclick = toggleTorch;
 
+/* ---- Tap-to-focus on the live image (Android Chrome) ---- */
+let focusTrack = null;
+function setupFocus(stream){
+  const t = stream.getVideoTracks()[0];
+  const caps = t.getCapabilities ? t.getCapabilities() : {};
+  focusTrack = t;
+  // Actively autofocus by default (some cameras start in 'none'/fixed).
+  if(caps.focusMode && caps.focusMode.includes('continuous')){
+    t.applyConstraints({ advanced:[{ focusMode:'continuous' }] }).catch(()=>{});
+  }
+}
+function flashRing(x, y){
+  const r = $('focusRing');
+  r.style.left = x+'px'; r.style.top = y+'px';
+  r.classList.remove('show'); void r.offsetWidth;  // restart the animation
+  r.classList.add('show');
+  clearTimeout(flashRing._t); flashRing._t = setTimeout(()=>r.classList.remove('show'), 700);
+}
+async function focusAt(e){
+  const v = $('video'); const rect = v.getBoundingClientRect();
+  if(!rect.width) return;
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  flashRing(px, py);                                  // feedback always
+  if(!focusTrack) return;
+  const caps = focusTrack.getCapabilities ? focusTrack.getCapabilities() : {};
+  const adv = {};
+  // Focus at the tapped point if the camera supports a point of interest…
+  if(caps.pointsOfInterest){ adv.pointsOfInterest = [{ x: px/rect.width, y: py/rect.height }]; }
+  // …and (re)trigger a focus pass.
+  if(caps.focusMode && caps.focusMode.includes('single-shot')) adv.focusMode = 'single-shot';
+  else if(caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+  if(Object.keys(adv).length){ try{ await focusTrack.applyConstraints({ advanced:[adv] }); }catch(_){} }
+}
+$('video').addEventListener('click', focusAt);
+
+/* ---- Keep the screen awake while scanning (Wake Lock API) ---- */
+let wakeLock = null;
+async function keepAwake(){ try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(_){ } }
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') keepAwake(); });
+
+/* ---- Pinch-to-zoom on the camera ---- */
+let pinchStart = 0, pinchBase = 1;
+function pinchDist(t){ return Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY); }
+$('video').addEventListener('touchstart', e=>{ if(e.touches.length===2){ pinchStart=pinchDist(e.touches); pinchBase=Number($('zoom').value)||1; } }, {passive:true});
+$('video').addEventListener('touchmove', e=>{
+  if(e.touches.length===2 && pinchStart){ e.preventDefault(); applyZoom(pinchBase * (pinchDist(e.touches)/pinchStart)); }
+}, {passive:false});
+$('video').addEventListener('touchend', ()=>{ pinchStart=0; });
+
+/* ---- Optical/digital zoom (Android Chrome) ---- */
+let zoomTrack = null;
+function setupZoom(stream){
+  const t = stream.getVideoTracks()[0];
+  const caps = t.getCapabilities ? t.getCapabilities() : {};
+  if(!caps.zoom){ $('zoomWrap').hidden = true; return; }   // unsupported (e.g. iPhone)
+  zoomTrack = t;
+  const z = $('zoom');
+  z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
+  const cur = (t.getSettings && t.getSettings().zoom) || caps.zoom.min;
+  z.value = cur;
+  $('zoomVal').textContent = Number(cur).toFixed(1) + '×';
+  $('zoomWrap').hidden = false;
+  if(PREF.zoom) applyZoom(PREF.zoom);   // restore last-used zoom
+}
+async function applyZoom(v){
+  if(!zoomTrack) return;
+  const z = $('zoom');
+  v = Math.min(Number(z.max), Math.max(Number(z.min), Number(v)));
+  z.value = v;
+  $('zoomVal').textContent = v.toFixed(1) + '×';
+  savePrefs();
+  try{ await zoomTrack.applyConstraints({ advanced:[{ zoom: v }] }); }catch(_){}
+}
+$('zoom').addEventListener('input', e=>applyZoom(e.target.value));
+$('zoomIn').onclick  = ()=>applyZoom(Number($('zoom').value) + Number($('zoom').step) * 5);
+$('zoomOut').onclick = ()=>applyZoom(Number($('zoom').value) - Number($('zoom').step) * 5);
+
 /* ---- Scan mode: Tap (default) vs Auto ---- */
 let scanMode = 'tap', pendingCode = '';
 function setScanMode(m){ scanMode = m;
   $('scanmode').textContent = m==='tap' ? '🖐️ Tap to Scan' : '⚡ Auto Scan';
   $('capture').hidden = (m!=='tap');
-  $('camHint').textContent = m==='tap' ? 'Frame the QR you want, then tap “Scan”.' : 'Auto: hold over a QR to scan it.';
+  $('camHint').textContent = (m==='tap' ? 'Frame the QR, then tap “Scan”.' : 'Auto: hold over a QR to scan it.') + ' Tap the image to focus.';
   pendingCode=''; $('capture').disabled=true; $('capture').classList.remove('ready'); $('capture').textContent='📷 Scan';
+  savePrefs();
 }
 $('scanmode').onclick = ()=> setScanMode(scanMode==='tap' ? 'auto' : 'tap');
 $('capture').onclick = ()=>{ if(pendingCode) onScan(pendingCode); };
-setScanMode('tap');
 
 function beep(){ try{ const a=new (window.AudioContext||window.webkitAudioContext)(); const o=a.createOscillator();
   o.connect(a.destination); o.frequency.value=880; o.start(); setTimeout(()=>{o.stop();a.close();},90);}catch(_){ } }
@@ -220,37 +344,89 @@ function onScan(sku){
   else $('qty').focus();                 // count: let them type the number
 }
 
+/* ---- Session counter + success flash ---- */
+let sessCount = 0;
+function bumpCount(){ sessCount++; $('sessCount').textContent = sessCount+' scanned'; }
+function flashOK(){ const f=$('flash'); f.classList.add('show'); setTimeout(()=>f.classList.remove('show'), 220); }
+
+/* ---- Offline retry queue (survives reloads via localStorage) ---- */
+let queue = JSON.parse(localStorage.getItem('scanQueue')||'[]'), flushing = false;
+function saveQueue(){ try{ localStorage.setItem('scanQueue', JSON.stringify(queue)); }catch(_){ } updateQueueBadge(); }
+function updateQueueBadge(){ const b=$('queueBadge'); if(queue.length){ b.hidden=false; b.textContent=queue.length+' queued'; } else b.hidden=true; }
+async function flushQueue(){
+  if(flushing || !queue.length) return; flushing = true;
+  while(queue.length){
+    try{ const d = await sendPayload(queue[0]); if(d && d.ok){ queue.shift(); saveQueue(); bumpCount(); } else break; }
+    catch(_){ break; }   // still offline — try again later
+  }
+  flushing = false;
+  if(!queue.length) status('All queued scans sent.');
+}
+window.addEventListener('online', flushQueue);
+setInterval(flushQueue, 15000);
+
+/* ---- Submit / logging ---- */
+function buildPayload(sku, qty){ return { sku, qty, mode, note: $('bin').value.trim(), secret: SHARED_SECRET }; }
+async function sendPayload(p){
+  const r = await fetch(APPS_SCRIPT_URL, { method:'POST',
+    headers:{ 'Content-Type':'text/plain;charset=utf-8' },   // text/plain avoids CORS preflight
+    body: JSON.stringify(p) });
+  return r.json();
+}
 async function submit(){
   const sku = $('sku').value.trim(); const qty = parseInt($('qty').value);
   if(!sku){ status('Enter or scan a SKU', true); return; }
   if(isNaN(qty)){ status('Enter a quantity', true); return; }
+  const p = buildPayload(sku, qty);
   $('submit').disabled = true; status('Saving…');
   try{
-    const r = await fetch(APPS_SCRIPT_URL, {
-      method:'POST',
-      headers:{ 'Content-Type':'text/plain;charset=utf-8' }, // text/plain avoids CORS preflight
-      body: JSON.stringify({ sku, qty, mode, secret: SHARED_SECRET })
-    });
-    const d = await r.json();
+    const d = await sendPayload(p);
     if(d.ok){
+      flashOK(); bumpCount(); $('undo').hidden = false;
       logRow(true, sku, (mode==='receive'?'+':'set ')+d.qty, '#'+d.loggedRows);
       status('Logged ('+d.loggedRows+' total rows)');
       if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
     } else { logRow(false, sku, '—', d.error); status(d.error, true); }
-  }catch(err){ logRow(false,'Network error',sku,String(err)); status(String(err), true); }
+  }catch(err){
+    queue.push(p); saveQueue();                              // offline → queue + auto-retry
+    logRow('queued', sku, (mode==='receive'?'+':'set ')+qty, 'queued (offline)');
+    status('Offline — queued for retry ('+queue.length+')', true);
+    if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
+  }
   $('submit').disabled = false;
 }
 $('submit').onclick = submit;
 $('sku').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
 $('sku').addEventListener('input', e=>{ showPreview(e.target.value.trim()); });
+$('bin').addEventListener('input', savePrefs);
+
+/* ---- Undo last logged scan (backend deletes the last sheet row) ---- */
+async function undoLast(){
+  if(queue.length){ status('Send queued scans before undoing.', true); return; }
+  $('undo').disabled = true; status('Undoing…');
+  try{
+    const d = await sendPayload({ action:'undo', secret: SHARED_SECRET });
+    if(d.ok){ logRow('undo', (d.removed&&d.removed[2])||'—', 'undo', 'removed row #'+d.removedRow); status('Undid last scan.'); $('undo').hidden = true; }
+    else status(d.error||'Undo failed', true);
+  }catch(err){ status('Undo failed (offline?)', true); }
+  $('undo').disabled = false;
+}
+$('undo').onclick = undoLast;
 
 function status(msg, bad){ const s=$('status'); s.textContent=msg; s.className = 'hint'+(bad?' err':''); }
 function logRow(ok, sku, qty, note){
-  const d=document.createElement('div'); d.className='row '+(ok?'ok':'bad');
+  const cls = ok===true ? 'ok' : ok==='queued' ? 'queued' : ok==='undo' ? 'undo' : 'bad';
+  const d=document.createElement('div'); d.className='row '+cls;
   d.innerHTML='<div><div>'+qty+'</div><div class="q">'+sku+'</div></div><div class="q">'+note+'</div>';
   $('log').prepend(d);
 }
-setMode('receive');
+
+/* ---- Init from saved preferences ---- */
+$('bin').value = PREF.bin || '';
+setMode(mode);                      // mode already = PREF.mode || 'receive'
+setScanMode(PREF.scanMode || 'tap');
+updateQueueBadge();
+flushQueue();                       // resend anything queued from a prior offline session
 startScanner();
 </script>
 </body>
