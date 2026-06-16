@@ -27,6 +27,8 @@
   .row{display:flex;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:8px;background:var(--card);border-left:4px solid #2a2138;margin-bottom:8px;font-size:14px}
   .row.ok{border-left-color:var(--ok)} .row.bad{border-left-color:var(--bad)}
   .row .q{color:var(--muted);font-size:12px}
+  .torch{display:block;margin:10px 16px 0;width:calc(100% - 32px);padding:12px;font-size:15px;font-weight:600;border:1px solid #2a2138;border-radius:10px;background:var(--card);color:var(--text)}
+  .torch.on{background:var(--gold);color:#1a1206;border-color:var(--gold)}
   .hint{color:var(--muted);font-size:12px;margin:6px 16px}
   .err{color:var(--bad)}
   .preview{display:flex;flex-direction:column;align-items:center;margin-bottom:12px}
@@ -44,6 +46,7 @@
 </div>
 
 <video id="video" playsinline muted></video>
+<button id="torch" class="torch" hidden>🔦 Flashlight: Off</button>
 <div class="hint" id="camHint">Point the camera at a label QR code…</div>
 
 <div class="panel">
@@ -110,6 +113,7 @@ async function startScanner(){
     const detector = new BarcodeDetector({ formats:['qr_code','data_matrix','code_128','ean_13','code_39'] });
     const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
     const v = $('video'); v.srcObject = stream; await v.play();
+    setupTorch(stream);
     const tick = async ()=>{
       try{
         const codes = await detector.detect(v);
@@ -127,6 +131,26 @@ async function startScanner(){
     $('camHint').innerHTML = '<span class="err">Camera blocked: '+err.message+'. Type the SKU instead.</span>';
   }
 }
+/* ---- Flashlight / torch (Android Chrome only) ---- */
+let torchTrack = null, torchOn = false;
+function setupTorch(stream){
+  const track = stream.getVideoTracks()[0];
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  if(!caps.torch){ $('torch').hidden = true; return; }   // unsupported (e.g. iPhone)
+  torchTrack = track; $('torch').hidden = false;
+}
+async function toggleTorch(){
+  if(!torchTrack) return;
+  torchOn = !torchOn;
+  try{
+    await torchTrack.applyConstraints({ advanced:[{ torch: torchOn }] });
+    const b = $('torch');
+    b.textContent = '🔦 Flashlight: ' + (torchOn ? 'On' : 'Off');
+    b.classList.toggle('on', torchOn);
+  }catch(err){ torchOn = !torchOn; $('camHint').innerHTML = '<span class="err">Flashlight unavailable: '+err.message+'</span>'; }
+}
+$('torch').onclick = toggleTorch;
+
 function beep(){ try{ const a=new (window.AudioContext||window.webkitAudioContext)(); const o=a.createOscillator();
   o.connect(a.destination); o.frequency.value=880; o.start(); setTimeout(()=>{o.stop();a.close();},90);}catch(_){ } }
 
