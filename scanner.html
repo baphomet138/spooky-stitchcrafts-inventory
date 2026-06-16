@@ -193,7 +193,9 @@ async function startScanner(){
   try{
     const detector = new BarcodeDetector({ formats:['qr_code','data_matrix','code_128','ean_13','code_39'] });
     const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    activeStream = stream; currentLens = 'main';
     const v = $('video'); v.srcObject = stream; await v.play();
+    await detectLenses(stream);
     setupTorch(stream);
     setupFocus(stream);
     setupZoom(stream);
@@ -293,33 +295,72 @@ $('video').addEventListener('touchmove', e=>{
 }, {passive:false});
 $('video').addEventListener('touchend', ()=>{ pinchStart=0; });
 
-/* ---- Optical/digital zoom (Android Chrome) ---- */
-let zoomTrack = null;
+/* ---- Lens detection: main vs 0.5× ultrawide (Android multi-camera) ---- */
+let activeStream = null, currentLens = 'main', mainDeviceId = null, uwDeviceId = null, switching = false;
+async function detectLenses(stream){
+  try{
+    const t = stream.getVideoTracks()[0];
+    mainDeviceId = (t.getSettings && t.getSettings().deviceId) || null;
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    // Labels are only populated after camera permission is granted (it is, by now).
+    const uw = cams.find(d => /ultra|wide/i.test(d.label) && !/tele|zoom/i.test(d.label) && d.deviceId !== mainDeviceId);
+    uwDeviceId = uw ? uw.deviceId : null;
+  }catch(_){}
+}
+
+/* ---- Unified zoom slider — folds the 0.5× ultrawide into the low end ---- */
+let zoomTrack = null, mainZoomCaps = null;
 function setupZoom(stream){
   const t = stream.getVideoTracks()[0];
   const caps = t.getCapabilities ? t.getCapabilities() : {};
-  if(!caps.zoom){ $('zoomWrap').hidden = true; return; }   // unsupported (e.g. iPhone)
-  zoomTrack = t;
+  zoomTrack = caps.zoom ? t : null;
+  mainZoomCaps = caps.zoom || null;
+  const hasZoom = !!caps.zoom, hasUW = !!uwDeviceId;
+  if(!hasZoom && !hasUW){ $('zoomWrap').hidden = true; return; }   // nothing to control (e.g. iPhone)
   const z = $('zoom');
-  z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
-  const cur = (t.getSettings && t.getSettings().zoom) || caps.zoom.min;
-  z.value = cur;
-  $('zoomVal').textContent = Number(cur).toFixed(1) + '×';
+  z.min  = hasUW ? 0.5 : (hasZoom ? caps.zoom.min : 1);            // ultrawide extends below 1.0×
+  z.max  = hasZoom ? caps.zoom.max : 1;
+  z.step = (hasZoom && caps.zoom.step) ? caps.zoom.step : 0.1;
+  const start = Math.min(Number(z.max), Math.max(Number(z.min), 1));   // always open at 1× (main lens)
+  z.value = start; $('zoomVal').textContent = start.toFixed(1) + '×';
   $('zoomWrap').hidden = false;
-  if(PREF.zoom) applyZoom(PREF.zoom);   // restore last-used zoom
+  applyZoom(start);
 }
-async function applyZoom(v){
-  if(!zoomTrack) return;
-  const z = $('zoom');
-  v = Math.min(Number(z.max), Math.max(Number(z.min), Number(v)));
-  z.value = v;
-  $('zoomVal').textContent = v.toFixed(1) + '×';
-  savePrefs();
+async function applyMainZoom(v){
+  if(!zoomTrack || !mainZoomCaps) return;
+  v = Math.min(Number(mainZoomCaps.max), Math.max(Number(mainZoomCaps.min), Number(v)));
   try{ await zoomTrack.applyConstraints({ advanced:[{ zoom: v }] }); }catch(_){}
 }
-$('zoom').addEventListener('input', e=>applyZoom(e.target.value));
-$('zoomIn').onclick  = ()=>applyZoom(Number($('zoom').value) + Number($('zoom').step) * 5);
-$('zoomOut').onclick = ()=>applyZoom(Number($('zoom').value) - Number($('zoom').step) * 5);
+async function switchLens(which){
+  if(switching || which === currentLens) return;
+  const id = which === 'uw' ? uwDeviceId : mainDeviceId;
+  if(!id) return;
+  switching = true;
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id } } });
+    if(activeStream) activeStream.getTracks().forEach(tr=>tr.stop());
+    activeStream = s; const v = $('video'); v.srcObject = s; await v.play();
+    currentLens = which;
+    torchOn = false; $('torch').textContent = '🔦 Light: Off'; $('torch').classList.remove('on');
+    setupTorch(s); setupFocus(s);
+    const t = s.getVideoTracks()[0]; const caps = t.getCapabilities ? t.getCapabilities() : {};
+    zoomTrack = caps.zoom ? t : null;
+    if(which === 'main') mainZoomCaps = caps.zoom || null;
+  }catch(_){}
+  switching = false;
+}
+let zoomDebounce = 0;
+async function applyZoom(v){
+  const z = $('zoom');
+  v = Math.min(Number(z.max), Math.max(Number(z.min), Number(v)));
+  z.value = v; $('zoomVal').textContent = v.toFixed(1) + '×'; savePrefs();
+  // Below 1.0× → ultrawide lens (if present); 1.0×+ → main lens + digital zoom.
+  if(uwDeviceId && v < 1.0){ await switchLens('uw'); }
+  else { await switchLens('main'); await applyMainZoom(v); }
+}
+$('zoom').addEventListener('input', e=>{ const val=e.target.value; clearTimeout(zoomDebounce); zoomDebounce=setTimeout(()=>applyZoom(val), 60); });
+$('zoomIn').onclick  = ()=>applyZoom(Number($('zoom').value) + Number($('zoom').step||0.1) * 5);
+$('zoomOut').onclick = ()=>applyZoom(Number($('zoom').value) - Number($('zoom').step||0.1) * 5);
 
 /* ---- Scan mode: Tap (default) vs Auto ---- */
 let scanMode = 'tap', pendingCode = '';
