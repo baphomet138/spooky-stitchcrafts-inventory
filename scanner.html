@@ -7,47 +7,72 @@
 <style>
   :root{--bg:#0e0b14;--card:#1a1424;--accent:#8b3cf7;--gold:#d9a441;--ok:#3c6;--bad:#e25563;--text:#ece6f5;--muted:#9b8fb0}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif}
-  header{padding:14px 16px;background:#160f22;border-bottom:1px solid #2a2138;display:flex;align-items:center;gap:10px}
-  header h1{font-size:16px;margin:0;font-weight:700}
-  .modes{display:flex;margin:12px 16px;border:1px solid #2a2138;border-radius:10px;overflow:hidden}
-  .modes button{flex:1;padding:12px;background:var(--card);color:var(--muted);border:0;font-size:15px;font-weight:600}
-  .modes button.on{background:var(--accent);color:#fff}
-  #video{width:100%;max-height:46vh;object-fit:cover;background:#000;display:block}
-  .scanbox{margin:0 16px}
-  .panel{margin:12px 16px;background:var(--card);border:1px solid #2a2138;border-radius:12px;padding:14px}
-  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
-  input{width:100%;padding:12px;font-size:18px;background:#0e0b14;border:1px solid #2a2138;border-radius:8px;color:var(--text)}
-  .qtyrow{display:flex;gap:10px;align-items:center;margin-top:12px}
-  .qtyrow button{width:54px;height:54px;font-size:26px;border-radius:10px;border:1px solid #2a2138;background:#0e0b14;color:var(--text)}
-  .qtyrow input{text-align:center;font-size:24px}
-  .submit{width:100%;margin-top:14px;padding:16px;font-size:18px;font-weight:700;border:0;border-radius:10px;background:var(--gold);color:#1a1206}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;font-size:14px}
+  header{padding:8px 12px;background:#160f22;border-bottom:1px solid #2a2138;display:flex;align-items:center;gap:8px}
+  header h1{font-size:14px;margin:0;font-weight:700}
+  .handle{position:fixed;top:46%;z-index:31;border:1px solid #2a2138;color:#fff;font-size:18px;padding:16px 5px;line-height:1}
+  .handle.left{left:0;border-left:0;border-radius:0 12px 12px 0;background:#160f22}
+  .handle.right{right:0;border-right:0;border-radius:12px 0 0 12px;background:var(--accent)}
+  .drawer{position:fixed;top:0;bottom:0;width:64%;max-width:240px;background:#160f22;z-index:32;display:flex;flex-direction:column;gap:10px;padding:18px 14px;transition:transform .25s ease}
+  .drawer.left{left:0;border-right:1px solid #2a2138;transform:translateX(-100%)}
+  .drawer.right{right:0;border-left:1px solid #2a2138;transform:translateX(100%)}
+  .drawer.open{transform:translateX(0)}
+  .drawer-title{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .draw-btn{padding:12px;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text);font-size:14px;font-weight:600;text-align:left}
+  .draw-btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .drawer .ctl{flex:none;width:100%;margin:0;padding:12px;font-size:14px;text-align:left}
+  .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:30;opacity:0;pointer-events:none;transition:opacity .25s}
+  .backdrop.show{opacity:1;pointer-events:auto}
+  #video{width:100%;max-height:32vh;object-fit:cover;background:#000;display:block;margin-top:8px}
+  .controls{display:flex;gap:8px;margin:8px 12px 0}
+  .ctl{flex:1;padding:8px;font-size:12px;font-weight:600;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
+  .ctl.on{background:var(--gold);color:#1a1206;border-color:var(--gold)}
+  .panel{margin:8px 12px 0;background:var(--card);border:1px solid #2a2138;border-radius:10px;padding:10px}
+  label{display:block;font-size:11px;color:var(--muted);margin-bottom:3px}
+  input{width:100%;padding:9px;font-size:16px;background:#0e0b14;border:1px solid #2a2138;border-radius:8px;color:var(--text)}
+  .qtyrow{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .qtyrow button{width:44px;height:44px;font-size:22px;border-radius:8px;border:1px solid #2a2138;background:#0e0b14;color:var(--text)}
+  .qtyrow input{text-align:center;font-size:20px}
+  .capture{display:block;margin:8px 12px 0;padding:12px;font-size:16px;font-weight:700;border:0;border-radius:8px;background:var(--accent);color:#fff;width:calc(100% - 24px)}
+  .capture:disabled{opacity:.45}
+  .capture.ready{background:var(--ok);animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}
+  .submit{width:100%;margin-top:10px;padding:12px;font-size:16px;font-weight:700;border:0;border-radius:8px;background:var(--gold);color:#1a1206}
   .submit:disabled{opacity:.5}
-  .log{margin:12px 16px 40px}
-  .row{display:flex;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:8px;background:var(--card);border-left:4px solid #2a2138;margin-bottom:8px;font-size:14px}
+  .log{margin:8px 12px 24px}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:6px;background:var(--card);border-left:3px solid #2a2138;margin-bottom:6px;font-size:13px}
   .row.ok{border-left-color:var(--ok)} .row.bad{border-left-color:var(--bad)}
-  .row .q{color:var(--muted);font-size:12px}
-  .torch{display:block;margin:10px 16px 0;width:calc(100% - 32px);padding:12px;font-size:15px;font-weight:600;border:1px solid #2a2138;border-radius:10px;background:var(--card);color:var(--text)}
-  .torch.on{background:var(--gold);color:#1a1206;border-color:var(--gold)}
-  .hint{color:var(--muted);font-size:12px;margin:6px 16px}
+  .row .q{color:var(--muted);font-size:11px}
+  .hint{color:var(--muted);font-size:11px;margin:4px 12px 0}
   .err{color:var(--bad)}
-  .preview{display:flex;flex-direction:column;align-items:center;margin-bottom:12px}
-  #pvImg{width:120px;height:120px;object-fit:contain;background:#fff;border-radius:10px;display:none}
-  .pvName{font-size:15px;font-weight:600;text-align:center;margin-top:8px;min-height:20px}
+  .preview{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  #pvImg{width:48px;height:48px;object-fit:contain;background:#fff;border-radius:6px;display:none;flex:none}
+  .pvName{font-size:13px;font-weight:600;min-height:16px}
   .pvName.unknown{color:var(--bad)}
 </style>
 </head>
 <body>
 <header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1></header>
 
-<div class="modes">
-  <button id="mReceive" class="on">📥 Receiving (+)</button>
-  <button id="mCount">🔢 Count (set)</button>
-</div>
+<button id="hTools" class="handle left" aria-label="Open tools">🔦</button>
+<button id="hMode" class="handle right" aria-label="Open mode">📥</button>
+<div id="backdrop" class="backdrop"></div>
+
+<aside id="drawerTools" class="drawer left">
+  <div class="drawer-title">Tools</div>
+  <button id="torch" class="ctl" hidden>🔦 Light: Off</button>
+  <button id="scanmode" class="ctl">🖐️ Tap to Scan</button>
+</aside>
+
+<aside id="drawerMode" class="drawer right">
+  <div class="drawer-title">Mode</div>
+  <button id="mReceive" class="draw-btn on">📥 Receiving (+)</button>
+  <button id="mCount" class="draw-btn">🔢 Count (set)</button>
+</aside>
 
 <video id="video" playsinline muted></video>
-<button id="torch" class="torch" hidden>🔦 Flashlight: Off</button>
-<div class="hint" id="camHint">Point the camera at a label QR code…</div>
+<button id="capture" class="capture">📷 Scan</button>
+<div class="hint" id="camHint">Frame the QR you want, then tap “Scan”.</div>
 
 <div class="panel">
   <div id="preview" class="preview">
@@ -96,9 +121,21 @@ function setMode(m){ mode = m;
   $('mReceive').classList.toggle('on', m==='receive');
   $('mCount').classList.toggle('on', m==='count');
   $('qty').value = m==='receive' ? 1 : 0;
+  $('hMode').textContent = m==='receive' ? '📥' : '🔢';   // tab reflects current mode
 }
-$('mReceive').onclick = ()=>setMode('receive');
-$('mCount').onclick   = ()=>setMode('count');
+$('mReceive').onclick = ()=>{ setMode('receive'); closeDrawers(); };
+$('mCount').onclick   = ()=>{ setMode('count');   closeDrawers(); };
+
+/* ---- Edge drawers (mode on the right, tools on the left) ---- */
+function closeDrawers(){ $('drawerMode').classList.remove('open'); $('drawerTools').classList.remove('open'); $('backdrop').classList.remove('show'); }
+function toggleDrawer(el){
+  const open = !el.classList.contains('open');
+  closeDrawers();
+  if(open){ el.classList.add('open'); $('backdrop').classList.add('show'); }
+}
+$('hMode').onclick  = ()=>toggleDrawer($('drawerMode'));
+$('hTools').onclick = ()=>toggleDrawer($('drawerTools'));
+$('backdrop').onclick = closeDrawers;
 $('plus').onclick  = ()=>$('qty').value = (parseInt($('qty').value||0)+1);
 $('minus').onclick = ()=>$('qty').value = Math.max(0, parseInt($('qty').value||0)-1);
 
@@ -119,9 +156,18 @@ async function startScanner(){
         const codes = await detector.detect(v);
         if(codes.length){
           const val = codes[0].rawValue.trim(), now = Date.now();
-          if(val && (val!==lastCode || now-lastAt>2500)){
-            lastCode=val; lastAt=now; onScan(val);
+          if(scanMode==='auto'){
+            if(val && (val!==lastCode || now-lastAt>2500)){
+              lastCode=val; lastAt=now; onScan(val);
+            }
+          } else {
+            // Tap mode: just remember what's in view; user presses Scan to capture.
+            pendingCode = val;
+            const c=$('capture'); c.disabled=!val; c.classList.toggle('ready', !!val);
+            c.textContent = val ? '📷 Scan: '+val : '📷 Scan';
           }
+        } else if(scanMode!=='auto'){
+          pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan';
         }
       }catch(_){}
       requestAnimationFrame(tick);
@@ -145,11 +191,23 @@ async function toggleTorch(){
   try{
     await torchTrack.applyConstraints({ advanced:[{ torch: torchOn }] });
     const b = $('torch');
-    b.textContent = '🔦 Flashlight: ' + (torchOn ? 'On' : 'Off');
+    b.textContent = '🔦 Light: ' + (torchOn ? 'On' : 'Off');
     b.classList.toggle('on', torchOn);
   }catch(err){ torchOn = !torchOn; $('camHint').innerHTML = '<span class="err">Flashlight unavailable: '+err.message+'</span>'; }
 }
 $('torch').onclick = toggleTorch;
+
+/* ---- Scan mode: Tap (default) vs Auto ---- */
+let scanMode = 'tap', pendingCode = '';
+function setScanMode(m){ scanMode = m;
+  $('scanmode').textContent = m==='tap' ? '🖐️ Tap to Scan' : '⚡ Auto Scan';
+  $('capture').hidden = (m!=='tap');
+  $('camHint').textContent = m==='tap' ? 'Frame the QR you want, then tap “Scan”.' : 'Auto: hold over a QR to scan it.';
+  pendingCode=''; $('capture').disabled=true; $('capture').classList.remove('ready'); $('capture').textContent='📷 Scan';
+}
+$('scanmode').onclick = ()=> setScanMode(scanMode==='tap' ? 'auto' : 'tap');
+$('capture').onclick = ()=>{ if(pendingCode) onScan(pendingCode); };
+setScanMode('tap');
 
 function beep(){ try{ const a=new (window.AudioContext||window.webkitAudioContext)(); const o=a.createOscillator();
   o.connect(a.destination); o.frequency.value=880; o.start(); setTimeout(()=>{o.stop();a.close();},90);}catch(_){ } }
