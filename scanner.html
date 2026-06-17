@@ -96,6 +96,7 @@
       <button id="zoomIn" class="zbtn" aria-label="Zoom in">+</button>
     </div>
   </div>
+  <button id="waitReady" class="ctl">⏸️ Wait for Ready: Off</button>
   <div id="waitWrap">
     <div class="zoomlabel"><span>⏱️ Auto wait</span><span id="waitVal">30s</span></div>
     <div class="zoomrow">
@@ -151,7 +152,7 @@ const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.g
 const $ = id => document.getElementById(id);
 /* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
 const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
-function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS })); }catch(_){ } }
+function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
@@ -374,6 +375,16 @@ $('zoomOut').onclick = ()=>applyZoom(Number($('zoom').value) - Number($('zoom').
 
 /* ---- Auto-mode pause/resume (scan once, then wait) ---- */
 let AUTO_PAUSE_SECS = Number(PREF.autoWait) || 30;
+let waitForReady = !!PREF.waitForReady;
+function setWaitForReady(v){
+  waitForReady = v;
+  const b = $('waitReady');
+  b.textContent = '⏸️ Wait for Ready: ' + (v ? 'On' : 'Off');
+  b.classList.toggle('on', v);
+  $('waitWrap').style.display = v ? 'none' : '';   // countdown irrelevant when on
+  savePrefs();
+}
+$('waitReady').onclick = ()=> setWaitForReady(!waitForReady);
 function setAutoWait(s){
   s = Math.min(120, Math.max(5, Math.round(Number(s)/5)*5));
   AUTO_PAUSE_SECS = s;
@@ -388,14 +399,14 @@ function clearAutoTimers(){ clearTimeout(autoTimer); clearInterval(autoTick); au
 function pauseAuto(fromScan){
   autoPaused = true; clearAutoTimers();
   const b = $('autoCtrl'); b.classList.add('paused');
-  if(fromScan){
+  if(fromScan && !waitForReady){
     let left = AUTO_PAUSE_SECS;
     const render = ()=>{ b.textContent = '▶️ Ready to scan ('+left+'s)'; };
     render();
     autoTick  = setInterval(()=>{ left--; if(left<=0) resumeAuto(); else render(); }, 1000);
-    autoTimer = setTimeout(resumeAuto, AUTO_PAUSE_SECS*1000);   // auto-resume after 30s
+    autoTimer = setTimeout(resumeAuto, AUTO_PAUSE_SECS*1000);   // auto-resume after the wait
   } else {
-    b.textContent = '▶️ Paused — tap to resume';                // manual pause: waits for tap
+    b.textContent = fromScan ? '▶️ Ready to scan' : '▶️ Paused — tap to resume';   // waits for tap
   }
 }
 function resumeAuto(){
@@ -525,6 +536,7 @@ function logRow(ok, sku, qty, note){
 /* ---- Init from saved preferences ---- */
 $('bin').value = PREF.bin || '';
 setAutoWait(AUTO_PAUSE_SECS);        // sync slider/label to saved wait time
+setWaitForReady(waitForReady);      // sync the toggle
 setMode(mode);                      // mode already = PREF.mode || 'receive'
 setScanMode(PREF.scanMode || 'tap');
 updateQueueBadge();
