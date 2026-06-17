@@ -203,7 +203,7 @@ async function startScanner(){
   }
   try{
     const detector = new BarcodeDetector({ formats:['qr_code','data_matrix','code_128','ean_13','code_39'] });
-    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment', width:{ ideal:1280 }, height:{ ideal:720 } } });
     activeStream = stream; currentLens = 'main';
     const v = $('video'); v.srcObject = stream; await v.play();
     await detectLenses(stream);
@@ -348,7 +348,7 @@ async function switchLens(which){
   if(!id) return;
   switching = true;
   try{
-    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id } } });
+    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id }, width:{ ideal:1280 }, height:{ ideal:720 } } });
     if(activeStream) activeStream.getTracks().forEach(tr=>tr.stop());
     activeStream = s; const v = $('video'); v.srcObject = s; await v.play();
     currentLens = which;
