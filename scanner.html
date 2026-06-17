@@ -87,6 +87,7 @@
 <aside id="drawerTools" class="drawer left">
   <div class="drawer-title">Tools</div>
   <button id="torch" class="ctl" hidden>🔦 Light: Off</button>
+  <button id="macro" class="ctl" hidden>🔬 Macro: Off</button>
   <button id="scanmode" class="ctl">🖐️ Tap to Scan</button>
   <div id="zoomWrap" hidden>
     <div class="zoomlabel"><span>🔎 Zoom</span><span id="zoomVal">1.0×</span></div>
@@ -152,7 +153,7 @@ const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.g
 const $ = id => document.getElementById(id);
 /* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
 const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
-function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady })); }catch(_){ } }
+function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
@@ -203,7 +204,7 @@ async function startScanner(){
   }
   try{
     const detector = new BarcodeDetector({ formats:['qr_code','data_matrix','code_128','ean_13','code_39'] });
-    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment', width:{ ideal:1280 }, height:{ ideal:720 } } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment', width:{ ideal:1920 }, height:{ ideal:1080 } } });
     activeStream = stream; currentLens = 'main';
     const v = $('video'); v.srcObject = stream; await v.play();
     await detectLenses(stream);
@@ -211,30 +212,43 @@ async function startScanner(){
     setupFocus(stream);
     setupZoom(stream);
     keepAwake();
-    const tick = async ()=>{
-      try{
-        const codes = await detector.detect(v);
-        if(codes.length){
-          const val = codes[0].rawValue.trim(), now = Date.now();
-          if(scanMode==='auto'){
-            if(!autoPaused && val && (val!==lastCode || now-lastAt>2500)){
-              lastCode=val; lastAt=now; onScan(val); pauseAuto(true);   // scan once, then pause
-            }
-          } else {
-            // Tap mode: just remember what's in view; user presses Scan to capture.
-            pendingCode = val;
-            const c=$('capture'); c.disabled=!val; c.classList.toggle('ready', !!val);
-            c.textContent = val ? '📷 Scan: '+val : '📷 Scan';
-          }
-        } else if(scanMode!=='auto'){
-          pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan';
-        }
-      }catch(_){}
+    // Detect only the centre square (matches the alignment reticle) on a small
+    // offscreen canvas, throttled to ~12/sec — keeps CPU/heat low on 1080p streams.
+    const scanCanvas = document.createElement('canvas');
+    const sctx = scanCanvas.getContext('2d', { willReadFrequently:true });
+    const DETECT_MS = 80, OUT = 480;
+    let lastDetect = 0;
+    const tick = async (ts)=>{
+      if(v.videoWidth && (ts - lastDetect) >= DETECT_MS){
+        lastDetect = ts;
+        try{
+          const vw=v.videoWidth, vh=v.videoHeight, side=Math.floor(Math.min(vw,vh)*0.6);
+          const sx=(vw-side)>>1, sy=(vh-side)>>1;
+          if(scanCanvas.width!==OUT){ scanCanvas.width=OUT; scanCanvas.height=OUT; }
+          sctx.drawImage(v, sx, sy, side, side, 0, 0, OUT, OUT);   // centre crop → small canvas
+          const codes = await detector.detect(scanCanvas);
+          if(codes.length){ handleDetected(codes[0].rawValue.trim()); }
+          else if(scanMode!=='auto'){ pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan'; }
+        }catch(_){}
+      }
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   }catch(err){
     $('camHint').innerHTML = '<span class="err">Camera blocked: '+err.message+'. Type the SKU instead.</span>';
+  }
+}
+function handleDetected(val){
+  const now = Date.now();
+  if(scanMode==='auto'){
+    if(!autoPaused && val && (val!==lastCode || now-lastAt>2500)){
+      lastCode=val; lastAt=now; onScan(val); pauseAuto(true);   // scan once, then pause
+    }
+  } else {
+    // Tap mode: remember what's framed; user presses Scan to capture.
+    pendingCode = val;
+    const c=$('capture'); c.disabled=!val; c.classList.toggle('ready', !!val);
+    c.textContent = val ? '📷 Scan: '+val : '📷 Scan';
   }
 }
 /* ---- Flashlight / torch (Android Chrome only) ---- */
@@ -257,17 +271,36 @@ async function toggleTorch(){
 }
 $('torch').onclick = toggleTorch;
 
-/* ---- Tap-to-focus on the live image (Android Chrome) ---- */
-let focusTrack = null;
+/* ---- Focus: continuous by default, optional Macro lock for close 2D codes ---- */
+let focusTrack = null, focusCaps = null, macroOn = !!PREF.macro;
 function setupFocus(stream){
   const t = stream.getVideoTracks()[0];
-  const caps = t.getCapabilities ? t.getCapabilities() : {};
+  focusCaps = t.getCapabilities ? t.getCapabilities() : {};
   focusTrack = t;
-  // Actively autofocus by default (some cameras start in 'none'/fixed).
-  if(caps.focusMode && caps.focusMode.includes('continuous')){
-    t.applyConstraints({ advanced:[{ focusMode:'continuous' }] }).catch(()=>{});
-  }
+  const canMacro = !!(focusCaps.focusMode && focusCaps.focusMode.includes('manual') && focusCaps.focusDistance);
+  $('macro').hidden = !canMacro;
+  $('macro').textContent = '🔬 Macro: ' + (macroOn ? 'On' : 'Off');
+  $('macro').classList.toggle('on', macroOn);
+  setTimeout(applyFocusMode, 500);   // let the hardware settle before enforcing focus
 }
+function applyFocusMode(){
+  if(!focusTrack || !focusCaps) return;
+  let adv = null;
+  // Macro fix for the "sticky focus locks at infinity" bug on multi-lens Androids:
+  if(macroOn && focusCaps.focusMode && focusCaps.focusMode.includes('manual') && focusCaps.focusDistance){
+    adv = { focusMode:'manual', focusDistance: focusCaps.focusDistance.min + (focusCaps.focusDistance.step || 0.1) };
+  } else if(focusCaps.focusMode && focusCaps.focusMode.includes('continuous')){
+    adv = { focusMode:'continuous' };
+  }
+  if(adv){ focusTrack.applyConstraints({ advanced:[adv] }).catch(()=>{}); }
+}
+function setMacro(v){
+  macroOn = v;
+  $('macro').textContent = '🔬 Macro: ' + (v ? 'On' : 'Off');
+  $('macro').classList.toggle('on', v);
+  savePrefs(); applyFocusMode();
+}
+$('macro').onclick = ()=> setMacro(!macroOn);
 function flashRing(x, y){
   const r = $('focusRing');
   r.style.left = x+'px'; r.style.top = y+'px';
@@ -283,12 +316,12 @@ async function focusAt(e){
   if(!focusTrack) return;
   const caps = focusTrack.getCapabilities ? focusTrack.getCapabilities() : {};
   const adv = {};
-  // Focus at the tapped point if the camera supports a point of interest…
+  // Focus at the tapped point if supported, and cycle the lens motor to re-rack…
   if(caps.pointsOfInterest){ adv.pointsOfInterest = [{ x: px/rect.width, y: py/rect.height }]; }
-  // …and (re)trigger a focus pass.
-  if(caps.focusMode && caps.focusMode.includes('single-shot')) adv.focusMode = 'single-shot';
-  else if(caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+  if(caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+  else if(caps.focusMode && caps.focusMode.includes('single-shot')) adv.focusMode = 'single-shot';
   if(Object.keys(adv).length){ try{ await focusTrack.applyConstraints({ advanced:[adv] }); }catch(_){} }
+  setTimeout(applyFocusMode, 600);                    // …then settle back to Macro/continuous
 }
 $('video').addEventListener('click', focusAt);
 
@@ -348,7 +381,7 @@ async function switchLens(which){
   if(!id) return;
   switching = true;
   try{
-    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id }, width:{ ideal:1280 }, height:{ ideal:720 } } });
+    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id }, width:{ ideal:1920 }, height:{ ideal:1080 } } });
     if(activeStream) activeStream.getTracks().forEach(tr=>tr.stop());
     activeStream = s; const v = $('video'); v.srcObject = s; await v.play();
     currentLens = which;
