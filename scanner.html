@@ -3,6 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0e0b14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Inventory Scanner">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <title>Spooky Stitchcrafts — Inventory Scanner</title>
 <style>
   :root{--bg:#0e0b14;--card:#1a1424;--accent:#8b3cf7;--gold:#d9a441;--ok:#3c6;--bad:#e25563;--text:#ece6f5;--muted:#9b8fb0}
@@ -197,46 +205,92 @@ $('minus').onclick = ()=>$('qty').value = Math.max(0, parseInt($('qty').value||0
 
 /* ---- Camera scanning via BarcodeDetector (Chrome on Android) ---- */
 let lastCode = '', lastAt = 0;
+let detector = null, scanCanvas = null, sctx = null;
+let rafRunning = false, starting = false, recovering = false, lastDetect = 0;
+const DETECT_MS = 80, OUT = 480;   // ~12 detections/sec on a 480px centre crop — low CPU/heat
+// Set the camera hint to an error message safely (never inject untrusted text as HTML).
+function camErr(msg){ const h=$('camHint'); h.textContent=''; const s=document.createElement('span'); s.className='err'; s.textContent=msg; h.appendChild(s); }
+
+// Build a detector limited to the formats this device actually supports.
+async function buildDetector(){
+  try{
+    let want = ['qr_code','data_matrix','code_128','ean_13','code_39'];
+    if(BarcodeDetector.getSupportedFormats){
+      const sup = await BarcodeDetector.getSupportedFormats();
+      const f = want.filter(x=>sup.includes(x));
+      want = f.length ? f : ['qr_code'];
+    }
+    return new BarcodeDetector({ formats: want });
+  }catch(_){ try{ return new BarcodeDetector(); }catch(__){ return null; } }
+}
+// Open a camera, trying progressively looser constraints so odd devices still work.
+async function getCameraStream(){
+  const tries = [
+    { facingMode:{ ideal:'environment' }, width:{ ideal:1920 }, height:{ ideal:1080 } },
+    { facingMode:'environment' },
+    true
+  ];
+  let err;
+  for(const video of tries){
+    try{ return await navigator.mediaDevices.getUserMedia({ video }); }catch(e){ err = e; }
+  }
+  throw err;
+}
 async function startScanner(){
+  if(starting) return; starting = true;                       // guard re-entrancy (restart races)
   if(!('BarcodeDetector' in window)){
-    $('camHint').innerHTML = '<span class="err">This browser can\'t scan with the camera. Use Chrome on Android, or type the SKU.</span>';
-    $('video').style.display='none'; return;
+    camErr("This browser can't scan with the camera. Use Chrome on Android, or type the SKU.");
+    $('video').style.display='none'; starting = false; return;
   }
   try{
-    const detector = new BarcodeDetector({ formats:['qr_code','data_matrix','code_128','ean_13','code_39'] });
-    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment', width:{ ideal:1920 }, height:{ ideal:1080 } } });
+    if(!detector) detector = await buildDetector();
+    if(!detector){ camErr('Barcode scanning unsupported here — type the SKU instead.'); $('video').style.display='none'; starting = false; return; }
+    const stream = await getCameraStream();
+    if(activeStream && activeStream !== stream){ activeStream.getTracks().forEach(tr=>tr.stop()); }
     activeStream = stream; currentLens = 'main';
-    const v = $('video'); v.srcObject = stream; await v.play();
+    const v = $('video'); v.style.display='block'; v.srcObject = stream; await v.play();
+    watchStream(stream);
     await detectLenses(stream);
-    setupTorch(stream);
-    setupFocus(stream);
-    setupZoom(stream);
-    keepAwake();
-    // Detect only the centre square (matches the alignment reticle) on a small
-    // offscreen canvas, throttled to ~12/sec — keeps CPU/heat low on 1080p streams.
-    const scanCanvas = document.createElement('canvas');
-    const sctx = scanCanvas.getContext('2d', { willReadFrequently:true });
-    const DETECT_MS = 80, OUT = 480;
-    let lastDetect = 0;
-    const tick = async (ts)=>{
-      if(v.videoWidth && (ts - lastDetect) >= DETECT_MS){
-        lastDetect = ts;
-        try{
-          const vw=v.videoWidth, vh=v.videoHeight, side=Math.floor(Math.min(vw,vh)*0.6);
-          const sx=(vw-side)>>1, sy=(vh-side)>>1;
-          if(scanCanvas.width!==OUT){ scanCanvas.width=OUT; scanCanvas.height=OUT; }
-          sctx.drawImage(v, sx, sy, side, side, 0, 0, OUT, OUT);   // centre crop → small canvas
-          const codes = await detector.detect(scanCanvas);
-          if(codes.length){ handleDetected(codes[0].rawValue.trim()); }
-          else if(scanMode!=='auto'){ pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan'; }
-        }catch(_){}
-      }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
+    setupTorch(stream); setupFocus(stream); setupZoom(stream); keepAwake();
+    startLoop();
   }catch(err){
-    $('camHint').innerHTML = '<span class="err">Camera blocked: '+err.message+'. Type the SKU instead.</span>';
+    camErr('Camera blocked: ' + ((err && err.message) || err) + '. Type the SKU instead.');
   }
+  starting = false;
+}
+// One persistent detection loop, created once — never duplicated across camera restarts.
+function startLoop(){
+  if(rafRunning) return; rafRunning = true;
+  if(!scanCanvas){ scanCanvas = document.createElement('canvas'); sctx = scanCanvas.getContext('2d', { willReadFrequently:true }); }
+  const v = $('video');
+  const tick = async (ts)=>{
+    const idleAuto = (scanMode==='auto' && autoPaused);       // skip detect work while auto-paused
+    if(!document.hidden && !idleAuto && detector && v.videoWidth && (ts - lastDetect) >= DETECT_MS){
+      lastDetect = ts;
+      try{
+        const vw=v.videoWidth, vh=v.videoHeight, side=Math.floor(Math.min(vw,vh)*0.6);
+        const sx=(vw-side)>>1, sy=(vh-side)>>1;
+        if(scanCanvas.width!==OUT){ scanCanvas.width=OUT; scanCanvas.height=OUT; }
+        sctx.drawImage(v, sx, sy, side, side, 0, 0, OUT, OUT);   // centre crop → small canvas
+        const codes = await detector.detect(scanCanvas);
+        if(codes.length){ handleDetected(String(codes[0].rawValue||'').trim()); }
+        else if(scanMode!=='auto'){ pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan'; }
+      }catch(_){}
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+// Recover automatically if the OS revokes the camera (backgrounding / another app grabs it).
+function watchStream(stream){
+  const t = stream.getVideoTracks()[0];
+  if(t) t.addEventListener('ended', onTrackEnded, { once:true });
+}
+async function onTrackEnded(){
+  if(recovering || document.hidden) return;                   // foreground only; visibility handler covers re-entry
+  recovering = true;
+  await startScanner();
+  recovering = false;
 }
 function handleDetected(val){
   const now = Date.now();
@@ -267,7 +321,7 @@ async function toggleTorch(){
     const b = $('torch');
     b.textContent = '🔦 Light: ' + (torchOn ? 'On' : 'Off');
     b.classList.toggle('on', torchOn);
-  }catch(err){ torchOn = !torchOn; $('camHint').innerHTML = '<span class="err">Flashlight unavailable: '+err.message+'</span>'; }
+  }catch(err){ torchOn = !torchOn; camErr('Flashlight unavailable: ' + ((err && err.message) || err)); }
 }
 $('torch').onclick = toggleTorch;
 
@@ -328,7 +382,12 @@ $('video').addEventListener('click', focusAt);
 /* ---- Keep the screen awake while scanning (Wake Lock API) ---- */
 let wakeLock = null;
 async function keepAwake(){ try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(_){ } }
-document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') keepAwake(); });
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState!=='visible') return;
+  keepAwake();
+  const t = activeStream && activeStream.getVideoTracks()[0];
+  if(!t || t.readyState==='ended') startScanner();            // camera was released while backgrounded
+});
 
 /* ---- Pinch-to-zoom on the camera ---- */
 let pinchStart = 0, pinchBase = 1;
@@ -384,6 +443,7 @@ async function switchLens(which){
     const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id }, width:{ ideal:1920 }, height:{ ideal:1080 } } });
     if(activeStream) activeStream.getTracks().forEach(tr=>tr.stop());
     activeStream = s; const v = $('video'); v.srcObject = s; await v.play();
+    watchStream(s);                                            // keep auto-recovery armed on the new lens
     currentLens = which;
     torchOn = false; $('torch').textContent = '🔦 Light: Off'; $('torch').classList.remove('on');
     setupTorch(s); setupFocus(s);
@@ -498,14 +558,19 @@ function flashOK(){ const f=$('flash'); f.classList.add('show'); setTimeout(()=>
 let queue = JSON.parse(localStorage.getItem('scanQueue')||'[]'), flushing = false;
 function saveQueue(){ try{ localStorage.setItem('scanQueue', JSON.stringify(queue)); }catch(_){ } updateQueueBadge(); }
 function updateQueueBadge(){ const b=$('queueBadge'); if(queue.length){ b.hidden=false; b.textContent=queue.length+' queued'; } else b.hidden=true; }
+let flushFails = 0;
 async function flushQueue(){
   if(flushing || !queue.length) return; flushing = true;
   while(queue.length){
-    try{ const d = await sendPayload(queue[0]); if(d && d.ok){ queue.shift(); saveQueue(); bumpCount(); } else break; }
-    catch(_){ break; }   // still offline — try again later
+    try{
+      const d = await sendPayload(queue[0]);
+      if(d && d.ok){ queue.shift(); saveQueue(); bumpCount(); flushFails = 0; }
+      else { flushFails++; break; }     // online but server rejected — stop, never drop the row
+    }catch(_){ flushFails++; break; }    // still offline — try again later
   }
   flushing = false;
-  if(!queue.length) status('All queued scans sent.');
+  if(!queue.length){ flushFails = 0; status('All queued scans sent.'); }
+  else if(flushFails >= 3){ status('⚠ '+queue.length+' scan(s) not sending — check connection.', true); }
 }
 window.addEventListener('online', flushQueue);
 setInterval(flushQueue, 15000);
@@ -518,12 +583,14 @@ async function sendPayload(p){
     body: JSON.stringify(p) });
   return r.json();
 }
+let submitting = false;
 async function submit(){
-  const sku = $('sku').value.trim(); const qty = parseInt($('qty').value);
+  if(submitting) return;                                     // guard against concurrent/rapid double-submit
+  const sku = $('sku').value.trim(); const qty = parseInt($('qty').value, 10);
   if(!sku){ status('Enter or scan a SKU', true); return; }
   if(isNaN(qty)){ status('Enter a quantity', true); return; }
   const p = buildPayload(sku, qty);
-  $('submit').disabled = true; status('Saving…');
+  submitting = true; $('submit').disabled = true; status('Saving…');
   try{
     const d = await sendPayload(p);
     if(d.ok){
@@ -537,8 +604,9 @@ async function submit(){
     logRow('queued', sku, (mode==='receive'?'+':'set ')+qty, 'queued (offline)');
     status('Offline — queued for retry ('+queue.length+')', true);
     if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
+  }finally{
+    submitting = false; $('submit').disabled = false;
   }
-  $('submit').disabled = false;
 }
 $('submit').onclick = submit;
 $('sku').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
@@ -562,8 +630,14 @@ function status(msg, bad){ const s=$('status'); s.textContent=msg; s.className =
 function logRow(ok, sku, qty, note){
   const cls = ok===true ? 'ok' : ok==='queued' ? 'queued' : ok==='undo' ? 'undo' : 'bad';
   const d=document.createElement('div'); d.className='row '+cls;
-  d.innerHTML='<div><div>'+qty+'</div><div class="q">'+sku+'</div></div><div class="q">'+note+'</div>';
-  $('log').prepend(d);
+  const left=document.createElement('div');
+  const q=document.createElement('div'); q.textContent = qty;
+  const s=document.createElement('div'); s.className='q'; s.textContent = sku;
+  left.appendChild(q); left.appendChild(s);
+  const n=document.createElement('div'); n.className='q'; n.textContent = note;
+  d.appendChild(left); d.appendChild(n);
+  const log=$('log'); log.prepend(d);
+  while(log.children.length > 80) log.removeChild(log.lastChild);   // cap DOM growth over long sessions
 }
 
 /* ---- Init from saved preferences ---- */
@@ -575,6 +649,11 @@ setScanMode(PREF.scanMode || 'tap');
 updateQueueBadge();
 flushQueue();                       // resend anything queued from a prior offline session
 startScanner();
+
+/* ---- Register the service worker (offline app shell; powers the installable PWA/APK) ---- */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
 </script>
 </body>
 </html>
