@@ -287,7 +287,7 @@ function startLoop(){
   const v = $('video');
   const tick = async (ts)=>{
     const idleAuto = (scanMode==='auto' && autoPaused);       // skip detect work while auto-paused
-    if(!document.hidden && !idleAuto && detector && v.videoWidth && (ts - lastDetect) >= DETECT_MS){
+    if(!document.hidden && !idleAuto && !modalOpen && detector && v.videoWidth && (ts - lastDetect) >= DETECT_MS){
       lastDetect = ts;
       try{
         const vw=v.videoWidth, vh=v.videoHeight, side=Math.floor(Math.min(vw,vh)*0.6);
@@ -666,6 +666,7 @@ function logRow(ok, sku, qty, note){
 }
 
 /* ---- Tap a logged row to view that product's image (from sku-map.json) ---- */
+let modalOpen = false;   // pauses camera detection while the image popup is open
 function openImageModal(sku){
   const rec = sku && SKU_MAP[sku];
   const img=$('imodalImg'), nm=$('imodalName');
@@ -678,9 +679,10 @@ function openImageModal(sku){
     img.style.display='none'; img.removeAttribute('src');
     nm.textContent = sku ? 'No image for this SKU' : 'No SKU'; nm.className='nm unknown';
   }
+  modalOpen = true;                       // pause scanning while viewing
   $('imodal').classList.add('show');
 }
-function closeImageModal(){ $('imodal').classList.remove('show'); }
+function closeImageModal(){ modalOpen = false; $('imodal').classList.remove('show'); }
 $('imodalClose').onclick = closeImageModal;
 $('imodal').addEventListener('click', e=>{ if(e.target===$('imodal')) closeImageModal(); });
 $('log').addEventListener('click', e=>{ const r=e.target.closest('.row'); if(r) openImageModal(r.dataset.sku); });
