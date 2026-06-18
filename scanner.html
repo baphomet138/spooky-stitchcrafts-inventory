@@ -567,7 +567,7 @@ async function flushQueue(){
   while(queue.length){
     try{
       const d = await sendPayload(queue[0]);
-      if(d && d.ok){ queue.shift(); saveQueue(); bumpCount(); flushFails = 0; }
+      if(d && d.ok){ queue.shift(); saveQueue(); bumpCount(); flushFails = 0; if(d.scanId) lastScanId = d.scanId; }
       else { flushFails++; break; }     // online but server rejected — stop, never drop the row
     }catch(_){ flushFails++; break; }    // still offline — try again later
   }
@@ -586,7 +586,7 @@ async function sendPayload(p){
     body: JSON.stringify(p) });
   return r.json();
 }
-let submitting = false;
+let submitting = false, lastScanId = null;   // lastScanId → sent on undo so the backend removes THIS device's row
 async function submit(){
   if(submitting) return;                                     // guard against concurrent/rapid double-submit
   const sku = $('sku').value.trim(); const qty = parseInt($('qty').value, 10);
@@ -597,7 +597,7 @@ async function submit(){
   try{
     const d = await sendPayload(p);
     if(d.ok){
-      flashOK(); bumpCount(); $('undo').hidden = false;
+      flashOK(); bumpCount(); $('undo').hidden = false; lastScanId = d.scanId || null;
       logRow(true, sku, (mode==='receive'?'+':'set ')+d.qty, '#'+d.loggedRows);
       status('Logged ('+d.loggedRows+' total rows)');
       if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
@@ -621,8 +621,8 @@ async function undoLast(){
   if(queue.length){ status('Send queued scans before undoing.', true); return; }
   $('undo').disabled = true; status('Undoing…');
   try{
-    const d = await sendPayload({ action:'undo', secret: SHARED_SECRET });
-    if(d.ok){ logRow('undo', (d.removed&&d.removed[2])||'—', 'undo', 'removed row #'+d.removedRow); status('Undid last scan.'); $('undo').hidden = true; }
+    const d = await sendPayload({ action:'undo', scanId: lastScanId, secret: SHARED_SECRET });
+    if(d.ok){ logRow('undo', (d.removed&&d.removed[2])||'—', 'undo', 'removed row #'+d.removedRow); status('Undid last scan.'); $('undo').hidden = true; lastScanId = null; }
     else status(d.error||'Undo failed', true);
   }catch(err){ status('Undo failed (offline?)', true); }
   $('undo').disabled = false;
