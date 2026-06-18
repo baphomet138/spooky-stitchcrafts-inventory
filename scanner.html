@@ -78,6 +78,17 @@
   .qbadge{font-size:11px;font-weight:700;color:#1a1206;background:var(--gold);padding:2px 8px;border-radius:10px;white-space:nowrap}
   .flash{position:fixed;inset:0;background:var(--ok);opacity:0;pointer-events:none;z-index:40;transition:opacity .12s}
   .flash.show{opacity:.4}
+  .row{cursor:pointer}
+  .rrow{display:flex;align-items:center;gap:8px}
+  .row .view{font-size:12px;opacity:.45}
+  .imodal{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.82);padding:18px}
+  .imodal.show{display:flex}
+  .imodal .box{background:var(--card);border:1px solid #2a2138;border-radius:14px;padding:14px;max-width:94vw;max-height:90vh;display:flex;flex-direction:column;align-items:center;gap:10px}
+  .imodal img{max-width:86vw;max-height:60vh;object-fit:contain;background:#fff;border-radius:8px}
+  .imodal .nm{font-size:15px;font-weight:700;text-align:center}
+  .imodal .nm.unknown{color:var(--bad)}
+  .imodal .sk{font-size:12px;color:var(--muted);word-break:break-all;text-align:center}
+  .imodal .cls{margin-top:2px;padding:10px 20px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:700;font-size:14px}
   .undo{width:100%;margin-top:10px;padding:10px;font-size:14px;font-weight:600;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
   .undo:disabled{opacity:.5}
   .row.queued{border-left-color:var(--gold)} .row.undo{border-left-color:var(--muted)}
@@ -90,6 +101,14 @@
   <span id="sessCount" class="sess">0 scanned</span>
 </header>
 <div id="flash" class="flash"></div>
+<div id="imodal" class="imodal">
+  <div class="box">
+    <img id="imodalImg" alt="">
+    <div id="imodalName" class="nm"></div>
+    <div id="imodalSku" class="sk"></div>
+    <button id="imodalClose" class="cls">Close</button>
+  </div>
+</div>
 
 <button id="hTools" class="handle left" aria-label="Open tools">🔦</button>
 <button id="hMode" class="handle right" aria-label="Open mode">📥</button>
@@ -632,16 +651,39 @@ $('undo').onclick = undoLast;
 function status(msg, bad){ const s=$('status'); s.textContent=msg; s.className = 'hint'+(bad?' err':''); }
 function logRow(ok, sku, qty, note){
   const cls = ok===true ? 'ok' : ok==='queued' ? 'queued' : ok==='undo' ? 'undo' : 'bad';
-  const d=document.createElement('div'); d.className='row '+cls;
+  const d=document.createElement('div'); d.className='row '+cls; d.dataset.sku = sku || '';
   const left=document.createElement('div');
   const q=document.createElement('div'); q.textContent = qty;
   const s=document.createElement('div'); s.className='q'; s.textContent = sku;
   left.appendChild(q); left.appendChild(s);
+  const right=document.createElement('div'); right.className='rrow';
   const n=document.createElement('div'); n.className='q'; n.textContent = note;
-  d.appendChild(left); d.appendChild(n);
+  const v=document.createElement('div'); v.className='view'; v.textContent = '🔍';   // tap row → product image
+  right.appendChild(n); right.appendChild(v);
+  d.appendChild(left); d.appendChild(right);
   const log=$('log'); log.prepend(d);
   while(log.children.length > 80) log.removeChild(log.lastChild);   // cap DOM growth over long sessions
 }
+
+/* ---- Tap a logged row to view that product's image (from sku-map.json) ---- */
+function openImageModal(sku){
+  const rec = sku && SKU_MAP[sku];
+  const img=$('imodalImg'), nm=$('imodalName');
+  $('imodalSku').textContent = sku || '';
+  img.onerror = ()=>{ img.style.display='none'; };
+  if(rec){
+    img.style.display='block'; img.src = IMG_BASE + rec[1];
+    nm.textContent = rec[0]; nm.className='nm';
+  } else {
+    img.style.display='none'; img.removeAttribute('src');
+    nm.textContent = sku ? 'No image for this SKU' : 'No SKU'; nm.className='nm unknown';
+  }
+  $('imodal').classList.add('show');
+}
+function closeImageModal(){ $('imodal').classList.remove('show'); }
+$('imodalClose').onclick = closeImageModal;
+$('imodal').addEventListener('click', e=>{ if(e.target===$('imodal')) closeImageModal(); });
+$('log').addEventListener('click', e=>{ const r=e.target.closest('.row'); if(r) openImageModal(r.dataset.sku); });
 
 /* ---- Init from saved preferences ---- */
 $('bin').value = PREF.bin || '';
