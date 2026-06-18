@@ -73,6 +73,8 @@
   .pvName{font-size:13px;font-weight:600;min-height:16px}
   .pvName.unknown{color:var(--bad)}
   .sess{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+  .installbtn{display:none;font-size:12px;font-weight:700;border:0;border-radius:8px;background:var(--accent);color:#fff;padding:5px 10px}
+  .installbtn.show{display:inline-block}
   .qbadge{font-size:11px;font-weight:700;color:#1a1206;background:var(--gold);padding:2px 8px;border-radius:10px;white-space:nowrap}
   .flash{position:fixed;inset:0;background:var(--ok);opacity:0;pointer-events:none;z-index:40;transition:opacity .12s}
   .flash.show{opacity:.4}
@@ -83,6 +85,7 @@
 </head>
 <body>
 <header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1>
+  <button id="installBtn" class="installbtn">📲 Install</button>
   <span id="queueBadge" class="qbadge" hidden>0 queued</span>
   <span id="sessCount" class="sess">0 scanned</span>
 </header>
@@ -654,6 +657,18 @@ startScanner();
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
 }
+
+/* ---- One-tap install: Chrome no longer auto-prompts, so surface our own button ---- */
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredPrompt = e; $('installBtn').classList.add('show'); });
+$('installBtn').onclick = async ()=>{
+  if(!deferredPrompt) return;
+  $('installBtn').classList.remove('show');
+  deferredPrompt.prompt();
+  try{ await deferredPrompt.userChoice; }catch(_){}
+  deferredPrompt = null;
+};
+window.addEventListener('appinstalled', ()=>{ $('installBtn').classList.remove('show'); deferredPrompt = null; });
 </script>
 </body>
 </html>
