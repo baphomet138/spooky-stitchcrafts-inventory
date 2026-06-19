@@ -89,6 +89,10 @@
   .imodal .nm.unknown{color:var(--bad)}
   .imodal .sk{font-size:12px;color:var(--muted);word-break:break-all;text-align:center}
   .imodal .cls{margin-top:2px;padding:10px 20px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:700;font-size:14px}
+  /* Native (ML Kit) scan: camera renders behind the webview; make the preview window transparent so it shows through */
+  body.native-scan{ background:transparent !important; }
+  body.native-scan #video{ display:none; }
+  body.native-scan .camwrap{ min-height:42vh; }
   .undo{width:100%;margin-top:10px;padding:10px;font-size:14px;font-weight:600;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
   .undo:disabled{opacity:.5}
   .row.queued{border-left-color:var(--gold)} .row.undo{border-left-color:var(--muted)}
@@ -320,6 +324,34 @@ async function onTrackEnded(){
   await startScanner();
   recovering = false;
 }
+/* ---- Native (Capacitor + ML Kit) scanning: far more robust 1D decoding than the web
+        BarcodeDetector. Active ONLY inside the Capacitor app; in a plain browser/TWA these
+        guards are false, so this stays inert and the web camera path runs instead. ---- */
+const CAP = window.Capacitor;
+const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
+const MLKit = (NATIVE && CAP.Plugins && CAP.Plugins.BarcodeScanner) || null;
+const NATIVE_FORMATS = ['QR_CODE','DATA_MATRIX','CODE_128','CODE_39','CODE_93','CODABAR','ITF','EAN_13','EAN_8','UPC_A','UPC_E'];
+let nativeTorchOn = false;
+async function startNativeScan(){
+  try{
+    const perm = await MLKit.requestPermissions();
+    if(perm && perm.camera && perm.camera !== 'granted' && perm.camera !== 'limited'){
+      camErr('Camera permission denied — enable it in Settings, or type the SKU.'); return;
+    }
+    document.documentElement.style.background = 'transparent';
+    document.body.classList.add('native-scan');          // transparent preview window → native camera shows through
+    $('torch').hidden = false; $('macro').hidden = true; // torch via the plugin; macro/manual-focus is N/A natively
+    // Route native barcode events through the SAME handler the web path uses (auto/tap, debounce, pause all reused).
+    await MLKit.addListener('barcodesScanned', (ev)=>{
+      if(modalOpen || !ev || !ev.barcodes) return;
+      for(const b of ev.barcodes){ if(b && b.rawValue){ handleDetected(String(b.rawValue).trim()); break; } }
+    });
+    await MLKit.addListener('scanError', ()=>{});
+    await MLKit.startScan({ formats: NATIVE_FORMATS, lensFacing: 'BACK' });
+  }catch(err){
+    camErr('Native scanner failed: ' + ((err && err.message) || err) + ' — type the SKU instead.');
+  }
+}
 function handleDetected(val){
   const now = Date.now();
   if(scanMode==='auto'){
@@ -342,6 +374,14 @@ function setupTorch(stream){
   torchTrack = track; $('torch').hidden = false;
 }
 async function toggleTorch(){
+  if(NATIVE && MLKit){                                       // native torch via the ML Kit plugin
+    nativeTorchOn = !nativeTorchOn;
+    try{
+      await (nativeTorchOn ? MLKit.enableTorch() : MLKit.disableTorch());
+      const b = $('torch'); b.textContent = '🔦 Light: ' + (nativeTorchOn ? 'On' : 'Off'); b.classList.toggle('on', nativeTorchOn);
+    }catch(err){ nativeTorchOn = !nativeTorchOn; camErr('Flashlight unavailable: ' + ((err && err.message) || err)); }
+    return;
+  }
   if(!torchTrack) return;
   torchOn = !torchOn;
   try{
@@ -413,6 +453,7 @@ async function keepAwake(){ try{ if('wakeLock' in navigator) wakeLock = await na
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState!=='visible') return;
   keepAwake();
+  if(NATIVE) return;                                          // native scanner manages its own camera lifecycle
   const t = activeStream && activeStream.getVideoTracks()[0];
   if(!t || t.readyState==='ended') startScanner();            // camera was released while backgrounded
 });
@@ -706,7 +747,7 @@ setMode(mode);                      // mode already = PREF.mode || 'receive'
 setScanMode(PREF.scanMode || 'tap');
 updateQueueBadge();
 flushQueue();                       // resend anything queued from a prior offline session
-startScanner();
+(NATIVE && MLKit) ? startNativeScan() : startScanner();   // native ML Kit scanner in the app; web BarcodeDetector elsewhere
 
 /* ---- Register the service worker (offline app shell; powers the installable PWA/APK) ---- */
 if('serviceWorker' in navigator){
