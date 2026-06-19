@@ -121,6 +121,14 @@
 <aside id="drawerTools" class="drawer left">
   <div class="drawer-title">Tools</div>
   <button id="torch" class="ctl" hidden>🔦 Light: Off</button>
+  <div id="torchWrap" hidden>
+    <div class="zoomlabel"><span>💡 Brightness</span><span id="torchVal"></span></div>
+    <div class="zoomrow">
+      <button id="torchDown" class="zbtn" aria-label="Dimmer">−</button>
+      <input id="torchLevel" type="range" min="1" step="1" aria-label="Torch brightness">
+      <button id="torchUp" class="zbtn" aria-label="Brighter">+</button>
+    </div>
+  </div>
   <button id="macro" class="ctl" hidden>🔬 Macro: Off</button>
   <button id="scanmode" class="ctl">🖐️ Tap to Scan</button>
   <div id="zoomWrap" hidden>
@@ -187,7 +195,7 @@ const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.g
 const $ = id => document.getElementById(id);
 /* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
 const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
-function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn })); }catch(_){ } }
+function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn, torchLevel })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
@@ -331,7 +339,7 @@ const CAP = window.Capacitor;
 const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
 const MLKit = (NATIVE && CAP.Plugins && CAP.Plugins.BarcodeScanner) || null;
 const NATIVE_FORMATS = ['QR_CODE','DATA_MATRIX','CODE_128','CODE_39','CODE_93','CODABAR','ITF','EAN_13','EAN_8','UPC_A','UPC_E'];
-let nativeTorchOn = false;
+let nativeTorchOn = false, torchMax = 0, torchLevel = Number(PREF.torchLevel) || 0;
 async function startNativeScan(){
   try{
     const perm = await MLKit.requestPermissions();
@@ -348,10 +356,34 @@ async function startNativeScan(){
     });
     await MLKit.addListener('scanError', ()=>{});
     await MLKit.startScan({ formats: NATIVE_FORMATS, lensFacing: 'BACK' });
+    // Variable torch brightness — only if this device's camera reports more than one level.
+    try{
+      const r = await MLKit.getMaxTorchStrengthLevel();
+      const max = r && r.maxLevel || 0;
+      if(max > 1) setupTorchSlider(max);
+    }catch(_){}
   }catch(err){
     camErr('Native scanner failed: ' + ((err && err.message) || err) + ' — type the SKU instead.');
   }
 }
+function setupTorchSlider(max){
+  torchMax = max;
+  if(!(torchLevel >= 1 && torchLevel <= max)) torchLevel = max;   // default to brightest
+  const s = $('torchLevel'); s.min = 1; s.max = max; s.step = 1; s.value = torchLevel;
+  $('torchVal').textContent = torchLevel + '/' + max;
+  $('torchWrap').hidden = false;
+  applyTorchLevel(torchLevel);
+}
+async function applyTorchLevel(v){
+  if(!torchMax) return;
+  torchLevel = Math.max(1, Math.min(torchMax, Math.round(Number(v) || 1)));
+  $('torchLevel').value = torchLevel; $('torchVal').textContent = torchLevel + '/' + torchMax;
+  savePrefs();
+  if(NATIVE && MLKit){ try{ await MLKit.setTorchStrengthLevel({ level: torchLevel }); }catch(_){} }
+}
+$('torchLevel').addEventListener('input', e=>applyTorchLevel(e.target.value));
+$('torchUp').onclick   = ()=>applyTorchLevel(torchLevel + 1);
+$('torchDown').onclick = ()=>applyTorchLevel(torchLevel - 1);
 function handleDetected(val){
   const now = Date.now();
   if(scanMode==='auto'){
