@@ -229,7 +229,7 @@ $('minus').onclick = ()=>$('qty').value = Math.max(0, parseInt($('qty').value||0
 let lastCode = '', lastAt = 0;
 let detector = null, scanCanvas = null, sctx = null;
 let rafRunning = false, starting = false, recovering = false, lastDetect = 0;
-const DETECT_MS = 80, DETECT_LONG = 1024;   // detect a near-full frame downscaled to ~1024px long edge (captures wide 1D barcodes + keeps bars sharp)
+const DETECT_MS = 80, DETECT_LONG = 1920;   // detect a near-full frame at up to ~1920px long edge — uses the high-res sensor detail to resolve thin 1D bars
 const TAP_HOLD_MS = 1500;          // tap mode: keep the Scan button "ready" this long after the last detection
 // Set the camera hint to an error message safely (never inject untrusted text as HTML).
 function camErr(msg){ const h=$('camHint'); h.textContent=''; const s=document.createElement('span'); s.className='err'; s.textContent=msg; h.appendChild(s); }
@@ -249,6 +249,7 @@ async function buildDetector(){
 // Open a camera, trying progressively looser constraints so odd devices still work.
 async function getCameraStream(){
   const tries = [
+    { facingMode:{ ideal:'environment' }, width:{ ideal:3840 }, height:{ ideal:2160 } },   // ask for the sensor's max (4K) — most detail for thin 1D bars
     { facingMode:{ ideal:'environment' }, width:{ ideal:1920 }, height:{ ideal:1080 } },
     { facingMode:'environment' },
     true
@@ -467,7 +468,7 @@ async function switchLens(which){
   if(!id) return;
   switching = true;
   try{
-    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id }, width:{ ideal:1920 }, height:{ ideal:1080 } } });
+    const s = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact: id }, width:{ ideal:3840 }, height:{ ideal:2160 } } });
     if(activeStream) activeStream.getTracks().forEach(tr=>tr.stop());
     activeStream = s; const v = $('video'); v.srcObject = s; await v.play();
     watchStream(s);                                            // keep auto-recovery armed on the new lens
