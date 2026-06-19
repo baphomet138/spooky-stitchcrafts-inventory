@@ -230,6 +230,7 @@ let lastCode = '', lastAt = 0;
 let detector = null, scanCanvas = null, sctx = null;
 let rafRunning = false, starting = false, recovering = false, lastDetect = 0;
 const DETECT_MS = 80, OUT = 480;   // ~12 detections/sec on a 480px centre crop — low CPU/heat
+const TAP_HOLD_MS = 1500;          // tap mode: keep the Scan button "ready" this long after the last detection
 // Set the camera hint to an error message safely (never inject untrusted text as HTML).
 function camErr(msg){ const h=$('camHint'); h.textContent=''; const s=document.createElement('span'); s.className='err'; s.textContent=msg; h.appendChild(s); }
 
@@ -296,7 +297,9 @@ function startLoop(){
         sctx.drawImage(v, sx, sy, side, side, 0, 0, OUT, OUT);   // centre crop → small canvas
         const codes = await detector.detect(scanCanvas);
         if(codes.length){ handleDetected(String(codes[0].rawValue||'').trim()); }
-        else if(scanMode!=='auto'){ pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan'; }
+        else if(scanMode!=='auto' && pendingCode && (Date.now()-pendingAt) > TAP_HOLD_MS){
+          pendingCode=''; const c=$('capture'); c.disabled=true; c.classList.remove('ready'); c.textContent='📷 Scan';   // clear only after the hold window
+        }
       }catch(_){}
     }
     requestAnimationFrame(tick);
@@ -320,11 +323,11 @@ function handleDetected(val){
     if(!autoPaused && val && (val!==lastCode || now-lastAt>2500)){
       lastCode=val; lastAt=now; onScan(val); pauseAuto(true);   // scan once, then pause
     }
-  } else {
-    // Tap mode: remember what's framed; user presses Scan to capture.
-    pendingCode = val;
-    const c=$('capture'); c.disabled=!val; c.classList.toggle('ready', !!val);
-    c.textContent = val ? '📷 Scan: '+val : '📷 Scan';
+  } else if(val){
+    // Tap mode: remember what's framed and keep the Scan button "ready". pendingAt drives a
+    // hold window so flaky frame-to-frame detection can't flicker the button out from under a tap.
+    pendingCode = val; pendingAt = now;
+    const c=$('capture'); c.disabled=false; c.classList.add('ready'); c.textContent = '📷 Scan: '+val;
   }
 }
 /* ---- Flashlight / torch (Android Chrome only) ---- */
@@ -536,7 +539,7 @@ function resumeAuto(){
 $('autoCtrl').onclick = ()=>{ autoPaused ? resumeAuto() : pauseAuto(false); };
 
 /* ---- Scan mode: Tap (default) vs Auto ---- */
-let scanMode = 'tap', pendingCode = '';
+let scanMode = 'tap', pendingCode = '', pendingAt = 0;
 function setScanMode(m){ scanMode = m;
   $('scanmode').textContent = m==='tap' ? '🖐️ Tap to Scan' : '⚡ Auto Scan';
   $('capture').hidden = (m!=='tap');
