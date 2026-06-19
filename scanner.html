@@ -40,7 +40,7 @@
   #video{width:100%;max-height:32vh;object-fit:cover;background:#000;display:block}
   .focus-ring{position:absolute;width:60px;height:60px;margin:-30px 0 0 -30px;border:2px solid var(--gold);border-radius:50%;box-sizing:border-box;pointer-events:none;opacity:0;transform:scale(1.3);transition:opacity .12s,transform .12s}
   .focus-ring.show{opacity:1;transform:scale(1)}
-  .align{position:absolute;top:50%;left:50%;width:60%;aspect-ratio:1/1;transform:translate(-50%,-50%);pointer-events:none}
+  .align{position:absolute;top:50%;left:50%;width:88%;height:74%;transform:translate(-50%,-50%);pointer-events:none}
   .align span{position:absolute;width:18px;height:18px;border:3px solid var(--gold)}
   .align .tl{top:0;left:0;border-right:0;border-bottom:0;border-radius:6px 0 0 0}
   .align .tr{top:0;right:0;border-left:0;border-bottom:0;border-radius:0 6px 0 0}
@@ -229,7 +229,7 @@ $('minus').onclick = ()=>$('qty').value = Math.max(0, parseInt($('qty').value||0
 let lastCode = '', lastAt = 0;
 let detector = null, scanCanvas = null, sctx = null;
 let rafRunning = false, starting = false, recovering = false, lastDetect = 0;
-const DETECT_MS = 80, OUT = 480;   // ~12 detections/sec on a 480px centre crop — low CPU/heat
+const DETECT_MS = 80, DETECT_LONG = 1024;   // detect a near-full frame downscaled to ~1024px long edge (captures wide 1D barcodes + keeps bars sharp)
 const TAP_HOLD_MS = 1500;          // tap mode: keep the Scan button "ready" this long after the last detection
 // Set the camera hint to an error message safely (never inject untrusted text as HTML).
 function camErr(msg){ const h=$('camHint'); h.textContent=''; const s=document.createElement('span'); s.className='err'; s.textContent=msg; h.appendChild(s); }
@@ -237,7 +237,7 @@ function camErr(msg){ const h=$('camHint'); h.textContent=''; const s=document.c
 // Build a detector limited to the formats this device actually supports.
 async function buildDetector(){
   try{
-    let want = ['qr_code','data_matrix','code_128','ean_13','code_39'];
+    let want = ['qr_code','data_matrix','code_128','code_39','code_93','codabar','itf','ean_13','ean_8','upc_a','upc_e'];
     if(BarcodeDetector.getSupportedFormats){
       const sup = await BarcodeDetector.getSupportedFormats();
       const f = want.filter(x=>sup.includes(x));
@@ -291,10 +291,12 @@ function startLoop(){
     if(!document.hidden && !idleAuto && !modalOpen && detector && v.videoWidth && (ts - lastDetect) >= DETECT_MS){
       lastDetect = ts;
       try{
-        const vw=v.videoWidth, vh=v.videoHeight, side=Math.floor(Math.min(vw,vh)*0.6);
-        const sx=(vw-side)>>1, sy=(vh-side)>>1;
-        if(scanCanvas.width!==OUT){ scanCanvas.width=OUT; scanCanvas.height=OUT; }
-        sctx.drawImage(v, sx, sy, side, side, 0, 0, OUT, OUT);   // centre crop → small canvas
+        const vw=v.videoWidth, vh=v.videoHeight;
+        const cw=Math.floor(vw*0.92), ch=Math.floor(vh*0.92);   // near-full frame (drop only the extreme edges)
+        const sx=(vw-cw)>>1, sy=(vh-ch)>>1;
+        const k=DETECT_LONG/Math.max(cw,ch), ow=Math.round(cw*k), oh=Math.round(ch*k);
+        if(scanCanvas.width!==ow || scanCanvas.height!==oh){ scanCanvas.width=ow; scanCanvas.height=oh; }
+        sctx.drawImage(v, sx, sy, cw, ch, 0, 0, ow, oh);   // downscale the wide frame so 1D barcodes fit + stay sharp
         const codes = await detector.detect(scanCanvas);
         if(codes.length){ handleDetected(String(codes[0].rawValue||'').trim()); }
         else if(scanMode!=='auto' && pendingCode && (Date.now()-pendingAt) > TAP_HOLD_MS){
