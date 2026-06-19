@@ -497,6 +497,10 @@ function setWaitForReady(v){
   b.textContent = '⏸️ Wait for Ready: ' + (v ? 'On' : 'Off');
   b.classList.toggle('on', v);
   $('waitWrap').style.display = v ? 'none' : '';   // countdown irrelevant when on
+  if(scanMode === 'auto'){
+    if(v) pauseAuto(false);               // gate the next scan (incl. the first) behind a Ready tap
+    else if(autoPaused) resumeAuto();     // turning it off resumes auto scanning
+  }
   savePrefs();
 }
 $('waitReady').onclick = ()=> setWaitForReady(!waitForReady);
@@ -521,7 +525,7 @@ function pauseAuto(fromScan){
     autoTick  = setInterval(()=>{ left--; if(left<=0) resumeAuto(); else render(); }, 1000);
     autoTimer = setTimeout(resumeAuto, AUTO_PAUSE_SECS*1000);   // auto-resume after the wait
   } else {
-    b.textContent = fromScan ? '▶️ Ready to scan' : '▶️ Paused — tap to resume';   // waits for tap
+    b.textContent = (fromScan || waitForReady) ? '▶️ Ready to scan' : '▶️ Paused — tap to resume';   // waits for tap
   }
 }
 function resumeAuto(){
@@ -539,7 +543,8 @@ function setScanMode(m){ scanMode = m;
   $('autoCtrl').hidden = (m!=='auto');
   $('camHint').textContent = (m==='tap' ? 'Frame the QR, then tap “Scan”.' : 'Auto: scans one item, then pauses — tap Ready for the next.') + ' Tap the image to focus.';
   pendingCode=''; $('capture').disabled=true; $('capture').classList.remove('ready'); $('capture').textContent='📷 Scan';
-  if(m==='auto') resumeAuto(); else { autoPaused=false; clearAutoTimers(); }
+  if(m==='auto'){ waitForReady ? pauseAuto(false) : resumeAuto(); }   // auto+wait starts in Ready state
+  else { autoPaused=false; clearAutoTimers(); }
   savePrefs();
 }
 $('scanmode').onclick = ()=> setScanMode(scanMode==='tap' ? 'auto' : 'tap');
