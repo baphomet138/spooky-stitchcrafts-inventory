@@ -59,6 +59,8 @@
   .capture:disabled{opacity:.45}
   .capture.ready{background:var(--ok);animation:pulse 1s infinite}
   .capture.paused{background:var(--gold);color:#1a1206;animation:pulse 1s infinite}
+  .flashbtn{display:block;margin:8px 12px 0;padding:12px;font-size:16px;font-weight:700;border:1px solid #2a2138;border-radius:8px;background:#160f22;color:var(--text);width:calc(100% - 24px)}
+  .flashbtn.on{background:var(--gold);color:#1a1206;border-color:var(--gold);animation:pulse 1s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}
   .submit{width:100%;margin-top:10px;padding:12px;font-size:16px;font-weight:700;border:0;border-radius:8px;background:var(--gold);color:#1a1206}
   .submit:disabled{opacity:.5}
@@ -121,14 +123,7 @@
 <aside id="drawerTools" class="drawer left">
   <div class="drawer-title">Tools</div>
   <button id="torch" class="ctl" hidden>🔦 Light: Off</button>
-  <div id="torchWrap" hidden>
-    <div class="zoomlabel"><span>💡 Brightness</span><span id="torchVal"></span></div>
-    <div class="zoomrow">
-      <button id="torchDown" class="zbtn" aria-label="Dimmer">−</button>
-      <input id="torchLevel" type="range" min="1" step="1" aria-label="Torch brightness">
-      <button id="torchUp" class="zbtn" aria-label="Brighter">+</button>
-    </div>
-  </div>
+  <button id="flashModeBtn" class="ctl" hidden>⚡ Flash mode: Full</button>
   <button id="macro" class="ctl" hidden>🔬 Macro: Off</button>
   <button id="scanmode" class="ctl">🖐️ Tap to Scan</button>
   <div id="zoomWrap" hidden>
@@ -163,6 +158,7 @@
 </div>
 <button id="capture" class="capture">📷 Scan</button>
 <button id="autoCtrl" class="capture" hidden>⏸ Pause</button>
+<button id="flashBtn" class="flashbtn" hidden>⚡ Flash to Scan</button>
 <div class="hint" id="camHint">Frame the QR you want, then tap “Scan”.</div>
 
 <div class="panel">
@@ -195,7 +191,7 @@ const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.g
 const $ = id => document.getElementById(id);
 /* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
 const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
-function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn, torchLevel })); }catch(_){ } }
+function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn, torchLevel, flashMode })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
@@ -349,6 +345,8 @@ async function startNativeScan(){
     document.documentElement.style.background = 'transparent';
     document.body.classList.add('native-scan');          // transparent preview window → native camera shows through
     $('torch').hidden = false; $('macro').hidden = true; // torch via the plugin; macro/manual-focus is N/A natively
+    $('flashBtn').hidden = false;                        // ⚡ flash-to-scan: momentary torch burst, reachable while scanning
+    $('flashModeBtn').hidden = false; setFlashMode(flashMode);   // Full vs PWM Strobe selector (Tools drawer)
     // Route native barcode events through the SAME handler the web path uses (auto/tap, debounce, pause all reused).
     await MLKit.addListener('barcodesScanned', (ev)=>{
       if(modalOpen || !ev || !ev.barcodes) return;
@@ -356,34 +354,24 @@ async function startNativeScan(){
     });
     await MLKit.addListener('scanError', ()=>{});
     await MLKit.startScan({ formats: NATIVE_FORMATS, lensFacing: 'BACK' });
-    // Variable torch brightness — only if this device's camera reports more than one level.
-    try{
-      const r = await MLKit.getMaxTorchStrengthLevel();
-      const max = r && r.maxLevel || 0;
-      if(max > 1) setupTorchSlider(max);
-    }catch(_){}
+    // In-session torch brightness is unsupported on this device (HAL on/off only). The closest control is
+    // the ⚡ Flash mode toggle (Tools drawer): Full vs PWM Strobe (lower average output). See setFlashMode().
   }catch(err){
     camErr('Native scanner failed: ' + ((err && err.message) || err) + ' — type the SKU instead.');
   }
 }
-function setupTorchSlider(max){
-  torchMax = max;
-  if(!(torchLevel >= 1 && torchLevel <= max)) torchLevel = max;   // default to brightest
-  const s = $('torchLevel'); s.min = 1; s.max = max; s.step = 1; s.value = torchLevel;
-  $('torchVal').textContent = torchLevel + '/' + max;
-  $('torchWrap').hidden = false;
-  applyTorchLevel(torchLevel);
-}
-async function applyTorchLevel(v){
-  if(!torchMax) return;
-  torchLevel = Math.max(1, Math.min(torchMax, Math.round(Number(v) || 1)));
-  $('torchLevel').value = torchLevel; $('torchVal').textContent = torchLevel + '/' + torchMax;
+// Flash mode (Tools drawer): switch what the ⚡ Flash to Scan button does.
+//  'full'   = steady full-brightness torch burst.
+//  'strobe' = native PWM strobe — pulses the torch on/off so the AVERAGE output is lower (the only
+//             software way to "dim" the on/off-only in-session torch; visibly flickers, may affect reads).
+let flashMode = (PREF.flashMode === 'strobe') ? 'strobe' : 'full';
+function setFlashMode(m){
+  flashMode = (m === 'strobe') ? 'strobe' : 'full';
+  $('flashModeBtn').textContent = '⚡ Flash mode: ' + (flashMode === 'strobe' ? 'Strobe (dimmer)' : 'Full');
+  $('flashModeBtn').classList.toggle('on', flashMode === 'strobe');
   savePrefs();
-  if(NATIVE && MLKit){ try{ await MLKit.setTorchStrengthLevel({ level: torchLevel }); }catch(_){} }
 }
-$('torchLevel').addEventListener('input', e=>applyTorchLevel(e.target.value));
-$('torchUp').onclick   = ()=>applyTorchLevel(torchLevel + 1);
-$('torchDown').onclick = ()=>applyTorchLevel(torchLevel - 1);
+$('flashModeBtn').onclick = ()=> setFlashMode(flashMode === 'full' ? 'strobe' : 'full');
 function handleDetected(val){
   const now = Date.now();
   if(scanMode==='auto'){
@@ -407,10 +395,12 @@ function setupTorch(stream){
 }
 async function toggleTorch(){
   if(NATIVE && MLKit){                                       // native torch via the ML Kit plugin
+    if(flashStrobing){ await flashOff(); return; }          // if a strobe burst is running, the 🔦 toggle just stops it
     nativeTorchOn = !nativeTorchOn;
     try{
       await (nativeTorchOn ? MLKit.enableTorch() : MLKit.disableTorch());
-      const b = $('torch'); b.textContent = '🔦 Light: ' + (nativeTorchOn ? 'On' : 'Off'); b.classList.toggle('on', nativeTorchOn);
+      clearTimeout(flashTimer); flashTimer = null;        // manual toggle cancels any pending flash auto-off
+      syncTorchUi();
     }catch(err){ nativeTorchOn = !nativeTorchOn; camErr('Flashlight unavailable: ' + ((err && err.message) || err)); }
     return;
   }
@@ -424,6 +414,42 @@ async function toggleTorch(){
   }catch(err){ torchOn = !torchOn; camErr('Flashlight unavailable: ' + ((err && err.message) || err)); }
 }
 $('torch').onclick = toggleTorch;
+
+/* ---- ⚡ Flash to Scan: the in-session torch is on/off only, so this fires it as a momentary burst.
+   Reachable on the main screen (NOT the drawer, which would release the camera). Tap = light on for a
+   short scan window so a hard-to-read code gets illuminated, then auto-off; tap again to stop early. ---- */
+let flashTimer = null, flashStrobing = false;
+const FLASH_STROBE_ON = 50, FLASH_STROBE_OFF = 80;   // PWM ~38% duty, ~7.7Hz — lower average output, visible flicker
+function syncTorchUi(){
+  $('torch').textContent = '🔦 Light: ' + (nativeTorchOn ? 'On' : 'Off');
+  $('torch').classList.toggle('on', nativeTorchOn);
+  $('flashBtn').textContent = nativeTorchOn ? '⚡ Flashing… (tap to stop)' : '⚡ Flash to Scan';
+  $('flashBtn').classList.toggle('on', nativeTorchOn);
+}
+async function flashOff(){
+  clearTimeout(flashTimer); flashTimer = null;
+  if(!(NATIVE && MLKit)) return;
+  try{
+    if(flashStrobing){ flashStrobing = false; await MLKit.stopTorchStrobe(); }
+    else if(nativeTorchOn){ await MLKit.disableTorch(); }
+  }catch(_){}
+  nativeTorchOn = false; syncTorchUi();
+}
+async function flashToScan(){
+  if(!(NATIVE && MLKit)) return;
+  if(nativeTorchOn || flashStrobing){ await flashOff(); return; }   // tap again = stop early
+  try{
+    if(flashMode === 'strobe'){
+      flashStrobing = true;
+      await MLKit.startTorchStrobe({ onMs: FLASH_STROBE_ON, offMs: FLASH_STROBE_OFF });
+    } else {
+      await MLKit.enableTorch();
+    }
+    nativeTorchOn = true; syncTorchUi();
+    flashTimer = setTimeout(flashOff, 4000);              // auto-off after the scan window
+  }catch(err){ flashStrobing = false; camErr('Flash unavailable: ' + ((err && err.message) || err)); }
+}
+$('flashBtn').onclick = flashToScan;
 
 /* ---- Focus: continuous by default, optional Macro lock for close 2D codes ---- */
 let focusTrack = null, focusCaps = null, macroOn = !!PREF.macro;
@@ -649,6 +675,7 @@ function beep(){
 
 function onScan(sku){
   beep(); if(navigator.vibrate) navigator.vibrate(40);
+  if(typeof flashOff === 'function') flashOff();   // a read succeeded → drop the flash burst
   $('sku').value = sku;
   showPreview(sku);
   if(mode==='receive') submit();        // receiving: auto-add on each scan
