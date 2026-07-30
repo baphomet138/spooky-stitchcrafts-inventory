@@ -659,7 +659,7 @@ function setScanMode(m){ scanMode = m;
   $('scanmode').textContent = m==='tap' ? '🖐️ Tap to Scan' : '⚡ Auto Scan';
   $('capture').hidden = (m!=='tap');
   $('autoCtrl').hidden = (m!=='auto');
-  $('camHint').textContent = (m==='tap' ? 'Frame the QR, then tap “Scan”.' : 'Auto: scans one item, then pauses — tap Ready for the next.') + ' Tap the image to focus.';
+  $('camHint').textContent = (m==='tap' ? 'Frame the QR, then tap “Scan”.' : 'Auto: scans one item, then pauses — tap Ready for the next.') + (NATIVE ? '' : ' Tap the image to focus.');
   pendingCode=''; $('capture').disabled=true; $('capture').classList.remove('ready'); $('capture').textContent='📷 Scan';
   if(m==='auto'){ waitForReady ? pauseAuto(false) : resumeAuto(); }   // auto+wait starts in Ready state
   else { autoPaused=false; clearAutoTimers(); }
