@@ -419,7 +419,7 @@ $('torch').onclick = toggleTorch;
    Reachable on the main screen (NOT the drawer, which would release the camera). Tap = light on for a
    short scan window so a hard-to-read code gets illuminated, then auto-off; tap again to stop early. ---- */
 let flashTimer = null, flashStrobing = false;
-const FLASH_STROBE_ON = 50, FLASH_STROBE_OFF = 80;   // PWM ~38% duty, ~7.7Hz — lower average output, visible flicker
+const FLASH_STROBE_ON = 40, FLASH_STROBE_OFF = 120;   // PWM ~25% duty, ~6.25Hz — lower average output, visible flicker
 function syncTorchUi(){
   $('torch').textContent = '🔦 Light: ' + (nativeTorchOn ? 'On' : 'Off');
   $('torch').classList.toggle('on', nativeTorchOn);
