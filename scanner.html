@@ -56,6 +56,7 @@
   .qtyrow button{width:44px;height:44px;font-size:22px;border-radius:8px;border:1px solid #2a2138;background:#0e0b14;color:var(--text)}
   .qtyrow input{text-align:center;font-size:20px}
   .capture{display:block;margin:8px 12px 0;padding:12px;font-size:16px;font-weight:700;border:0;border-radius:8px;background:var(--accent);color:#fff;width:calc(100% - 24px)}
+  .capture[hidden]{display:none}
   .capture:disabled{opacity:.45}
   .capture.ready{background:var(--ok);animation:pulse 1s infinite}
   .capture.paused{background:var(--gold);color:#1a1206;animation:pulse 1s infinite}
@@ -356,6 +357,10 @@ async function startNativeScan(){
     await MLKit.startScan({ formats: NATIVE_FORMATS, lensFacing: 'BACK' });
     // In-session torch brightness is unsupported on this device (HAL on/off only). The closest control is
     // the ⚡ Flash mode toggle (Tools drawer): Full vs PWM Strobe (lower average output). See setFlashMode().
+    try{                                          // zoom IS supported by the plugin natively (unpatched)
+      const min = await MLKit.getMinZoomRatio(), max = await MLKit.getMaxZoomRatio();
+      setupZoomNative(min.zoomRatio, max.zoomRatio);
+    }catch(_){}
   }catch(err){
     camErr('Native scanner failed: ' + ((err && err.message) || err) + ' — type the SKU instead.');
   }
@@ -540,6 +545,13 @@ async function detectLenses(stream){
 
 /* ---- Unified zoom slider — folds the 0.5× ultrawide into the low end ---- */
 let zoomTrack = null, mainZoomCaps = null;
+function setupZoomNative(min, max){
+  const z = $('zoom');
+  z.min = min; z.max = max; z.step = 0.1;
+  const start = Math.min(Number(max), Math.max(Number(min), 1));   // always open at 1×
+  z.value = start; $('zoomVal').textContent = start.toFixed(1) + '×';
+  $('zoomWrap').hidden = false;
+}
 function setupZoom(stream){
   const t = stream.getVideoTracks()[0];
   const caps = t.getCapabilities ? t.getCapabilities() : {};
@@ -585,6 +597,7 @@ async function applyZoom(v){
   const z = $('zoom');
   v = Math.min(Number(z.max), Math.max(Number(z.min), Number(v)));
   z.value = v; $('zoomVal').textContent = v.toFixed(1) + '×'; savePrefs();
+  if(NATIVE && MLKit){ try{ await MLKit.setZoomRatio({ zoomRatio: v }); }catch(_){} return; }
   // Below 1.0× → ultrawide lens (if present); 1.0×+ → main lens + digital zoom.
   if(uwDeviceId && v < 1.0){ await switchLens('uw'); }
   else { await switchLens('main'); await applyMainZoom(v); }
