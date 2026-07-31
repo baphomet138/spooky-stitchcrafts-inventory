@@ -196,9 +196,14 @@ function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mo
 let mode = PREF.mode || 'receive';
 
 /* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
-let SKU_MAP = {}, IMG_BASE = '';
-fetch('sku-map.json').then(r=>r.json()).then(d=>{ SKU_MAP = d.map||{}; IMG_BASE = d._base||''; })
+let SKU_MAP = {}, IMG_BASE = '', SKU_ALIAS = {};
+fetch('sku-map.json').then(r=>r.json()).then(d=>{ SKU_MAP = d.map||{}; IMG_BASE = d._base||''; SKU_ALIAS = d.alias||{}; })
   .catch(()=>{ $('pvName').textContent = '(sku-map.json not found — image preview off)'; });
+// A scanned/typed code may be the printed BARCODE (Shopify variant.barcode), which often differs
+// from the internal SKU (e.g. enamel pins have an 8-digit generated barcode, vendor imports have a
+// real UPC). Translate through the alias map so the preview AND the value logged to the sheet both
+// use the canonical Shopify SKU, never the raw scanned code.
+function resolveSku(v){ return SKU_ALIAS[v] || v; }
 function showPreview(sku){
   const rec = SKU_MAP[sku];
   const img = $('pvImg'), name = $('pvName');
@@ -378,6 +383,7 @@ function setFlashMode(m){
 }
 $('flashModeBtn').onclick = ()=> setFlashMode(flashMode === 'full' ? 'strobe' : 'full');
 function handleDetected(val){
+  val = resolveSku(val);
   const now = Date.now();
   if(scanMode==='auto'){
     if(!autoPaused && val && (val!==lastCode || now-lastAt>2500)){
@@ -732,7 +738,8 @@ async function sendPayload(p){
 let submitting = false, lastScanId = null;   // lastScanId → sent on undo so the backend removes THIS device's row
 async function submit(){
   if(submitting) return;                                     // guard against concurrent/rapid double-submit
-  const sku = $('sku').value.trim(); const qty = parseInt($('qty').value, 10);
+  const sku = resolveSku($('sku').value.trim()); $('sku').value = sku;   // translate a pasted/typed barcode too
+  const qty = parseInt($('qty').value, 10);
   if(!sku){ status('Enter or scan a SKU', true); return; }
   if(isNaN(qty)){ status('Enter a quantity', true); return; }
   const p = buildPayload(sku, qty);
@@ -756,7 +763,7 @@ async function submit(){
 }
 $('submit').onclick = submit;
 $('sku').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
-$('sku').addEventListener('input', e=>{ showPreview(e.target.value.trim()); });
+$('sku').addEventListener('input', e=>{ showPreview(resolveSku(e.target.value.trim())); });
 $('bin').addEventListener('input', savePrefs);
 
 /* ---- Undo last logged scan (backend deletes the last sheet row) ---- */
