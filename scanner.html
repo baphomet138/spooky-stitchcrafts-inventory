@@ -104,7 +104,7 @@
 <body>
 <header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1>
   <button id="installBtn" class="installbtn">📲 Install</button>
-  <span id="queueBadge" class="qbadge" hidden>0 queued</span>
+  <span id="queueBadge" class="qbadge" hidden>0 to export</span>
   <span id="sessCount" class="sess">0 scanned</span>
 </header>
 <div id="flash" class="flash"></div>
@@ -179,15 +179,16 @@
   <button class="submit" id="submit">Submit</button>
   <div class="hint" id="status"></div>
   <button id="undo" class="undo" hidden>↩︎ Undo last scan</button>
+  <button id="export" class="submit" style="background:var(--accent);color:#fff">📤 Export CSV</button>
 </div>
 
 <div class="log" id="log"></div>
 
 <script>
-/* ===== CONFIG — paste these two after deploying Code.gs ===== */
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz9zQJZDpnKnCmkjUoHhLKdWA98Vy3OCritikSVaSovhfot3m6MdSZWJI2_-MQsC7oe/exec';
-const SHARED_SECRET   = 'HK7nvDVin0qFErL0Cie9sTD61gZ4vCSz'; // must match Code.gs
-/* =========================================================== */
+/* ===== Local-only build: scans are stored ON THIS DEVICE and exported as a CSV
+   via the share sheet (email / Drive / Sheets). There is NO backend — the old
+   Apps Script endpoint + shared secret are gone, nothing leaves the phone until
+   you tap Export. ===== */
 
 const $ = id => document.getElementById(id);
 /* ---- Persisted preferences (mode, scan mode, zoom, bin) ---- */
@@ -706,78 +707,87 @@ let sessCount = 0;
 function bumpCount(){ sessCount++; $('sessCount').textContent = sessCount+' scanned'; }
 function flashOK(){ const f=$('flash'); f.classList.add('show'); setTimeout(()=>f.classList.remove('show'), 220); }
 
-/* ---- Offline retry queue (survives reloads via localStorage) ---- */
-let queue = JSON.parse(localStorage.getItem('scanQueue')||'[]'), flushing = false;
-function saveQueue(){ try{ localStorage.setItem('scanQueue', JSON.stringify(queue)); }catch(_){ } updateQueueBadge(); }
-function updateQueueBadge(){ const b=$('queueBadge'); if(queue.length){ b.hidden=false; b.textContent=queue.length+' queued'; } else b.hidden=true; }
-let flushFails = 0;
-async function flushQueue(){
-  if(flushing || !queue.length) return; flushing = true;
-  while(queue.length){
-    try{
-      const d = await sendPayload(queue[0]);
-      if(d && d.ok){ queue.shift(); saveQueue(); bumpCount(); flushFails = 0; if(d.scanId) lastScanId = d.scanId; }
-      else { flushFails++; break; }     // online but server rejected — stop, never drop the row
-    }catch(_){ flushFails++; break; }    // still offline — try again later
-  }
-  flushing = false;
-  if(!queue.length){ flushFails = 0; status('All queued scans sent.'); }
-  else if(flushFails >= 3){ status('⚠ '+queue.length+' scan(s) not sending — check connection.', true); }
+/* ---- Local scan log (persisted in localStorage; survives reload/close) ---- */
+let scanLog = [];
+try{ scanLog = JSON.parse(localStorage.getItem('scanLog')||'[]'); }catch(_){ scanLog = []; }
+function saveLog(){ try{ localStorage.setItem('scanLog', JSON.stringify(scanLog)); }catch(_){ } updateExportBadge(); }
+function updateExportBadge(){
+  const b = $('queueBadge');
+  if(scanLog.length){ b.hidden = false; b.textContent = scanLog.length + ' to export'; } else b.hidden = true;
+  $('undo').hidden = !scanLog.length;
 }
-window.addEventListener('online', flushQueue);
-setInterval(flushQueue, 15000);
 
-/* ---- Submit / logging ---- */
-function buildPayload(sku, qty){ return { sku, qty, mode, note: $('bin').value.trim(), secret: SHARED_SECRET }; }
-async function sendPayload(p){
-  const r = await fetch(APPS_SCRIPT_URL, { method:'POST',
-    headers:{ 'Content-Type':'text/plain;charset=utf-8' },   // text/plain avoids CORS preflight
-    body: JSON.stringify(p) });
-  return r.json();
-}
-let submitting = false, lastScanId = null;   // lastScanId → sent on undo so the backend removes THIS device's row
-async function submit(){
-  if(submitting) return;                                     // guard against concurrent/rapid double-submit
+/* ---- Submit / logging (all local — nothing leaves the device) ---- */
+function submit(){
   const sku = resolveSku($('sku').value.trim()); $('sku').value = sku;   // translate a pasted/typed barcode too
   const qty = parseInt($('qty').value, 10);
   if(!sku){ status('Enter or scan a SKU', true); return; }
   if(isNaN(qty)){ status('Enter a quantity', true); return; }
-  const p = buildPayload(sku, qty);
-  submitting = true; $('submit').disabled = true; status('Saving…');
-  try{
-    const d = await sendPayload(p);
-    if(d.ok){
-      flashOK(); bumpCount(); $('undo').hidden = false; lastScanId = d.scanId || null;
-      logRow(true, sku, (mode==='receive'?'+':'set ')+d.qty, '#'+d.loggedRows);
-      status('Logged ('+d.loggedRows+' total rows)');
-      if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
-    } else { logRow(false, sku, '—', d.error); status(d.error, true); }
-  }catch(err){
-    queue.push(p); saveQueue();                              // offline → queue + auto-retry
-    logRow('queued', sku, (mode==='receive'?'+':'set ')+qty, 'queued (offline)');
-    status('Offline — queued for retry ('+queue.length+')', true);
-    if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
-  }finally{
-    submitting = false; $('submit').disabled = false;
-  }
+  scanLog.push({ ts: new Date().toISOString(), mode, sku, qty, note: $('bin').value.trim() });
+  saveLog();
+  flashOK(); bumpCount();
+  logRow(true, sku, (mode==='receive'?'+':'set ')+qty, '#'+scanLog.length);
+  status('Logged — '+scanLog.length+' on device. Export when done.');
+  if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
 }
 $('submit').onclick = submit;
 $('sku').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
 $('sku').addEventListener('input', e=>{ showPreview(resolveSku(e.target.value.trim())); });
 $('bin').addEventListener('input', savePrefs);
 
-/* ---- Undo last logged scan (backend deletes the last sheet row) ---- */
-async function undoLast(){
-  if(queue.length){ status('Send queued scans before undoing.', true); return; }
-  $('undo').disabled = true; status('Undoing…');
-  try{
-    const d = await sendPayload({ action:'undo', scanId: lastScanId, secret: SHARED_SECRET });
-    if(d.ok){ logRow('undo', (d.removed&&d.removed[2])||'—', 'undo', 'removed row #'+d.removedRow); status('Undid last scan.'); $('undo').hidden = true; lastScanId = null; }
-    else status(d.error||'Undo failed', true);
-  }catch(err){ status('Undo failed (offline?)', true); }
-  $('undo').disabled = false;
+/* ---- Undo last logged scan (local row removal) ---- */
+function undoLast(){
+  if(!scanLog.length){ status('Nothing to undo', true); return; }
+  const r = scanLog.pop(); saveLog();
+  logRow('undo', r.sku, 'undo', 'removed #'+(scanLog.length+1));
+  status('Undid last scan ('+scanLog.length+' on device).');
 }
 $('undo').onclick = undoLast;
+
+/* ---- Export the scan log as CSV via the share sheet (Gmail / Drive / Sheets…).
+   Native: Filesystem writes the file, Share hands it to Android's share sheet.
+   Web fallback: Web Share API with a file, else a plain download. ---- */
+function csvEscape(v){ v = String(v == null ? '' : v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v; }
+function buildCsv(){
+  const lines = ['timestamp,mode,sku,qty,note'];
+  for(const r of scanLog) lines.push([r.ts, r.mode, r.sku, r.qty, r.note].map(csvEscape).join(','));
+  return lines.join('\r\n') + '\r\n';
+}
+function csvName(){
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  return 'scans-' + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.csv';
+}
+async function exportCsv(){
+  if(!scanLog.length){ status('Nothing to export', true); return; }
+  const csv = buildCsv(), name = csvName(), n = scanLog.length;
+  $('export').disabled = true;
+  try{
+    const FS = NATIVE && CAP.Plugins && CAP.Plugins.Filesystem;
+    const SH = NATIVE && CAP.Plugins && CAP.Plugins.Share;
+    if(FS && SH){
+      await FS.writeFile({ path: name, data: csv, directory: 'CACHE', encoding: 'utf8' });
+      const { uri } = await FS.getUri({ path: name, directory: 'CACHE' });
+      await SH.share({ title: name, files: [uri] });          // Android share sheet → pick Gmail etc.
+    } else if(navigator.canShare && navigator.canShare({ files: [new File([csv], name, { type:'text/csv' })] })){
+      await navigator.share({ files: [new File([csv], name, { type:'text/csv' })], title: name });
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv' })); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    status('Exported '+n+' scan(s) — '+name);
+    if(confirm('Exported '+n+' scan(s).\nClear them from this device now?')){
+      scanLog = []; saveLog(); status('Scan log cleared — ready for the next batch.');
+    }
+  }catch(err){
+    // Backing out of the share sheet rejects — that's a cancel, not a failure.
+    if(err && (err.name === 'AbortError' || /cancel/i.test(String(err.message||'')))) status('Export cancelled.');
+    else status('Export failed: ' + ((err && err.message) || err), true);
+  }finally{
+    $('export').disabled = false;
+  }
+}
+$('export').onclick = exportCsv;
 
 function status(msg, bad){ const s=$('status'); s.textContent=msg; s.className = 'hint'+(bad?' err':''); }
 function logRow(ok, sku, qty, note){
@@ -824,8 +834,9 @@ setAutoWait(AUTO_PAUSE_SECS);        // sync slider/label to saved wait time
 setWaitForReady(waitForReady);      // sync the toggle
 setMode(mode);                      // mode already = PREF.mode || 'receive'
 setScanMode(PREF.scanMode || 'tap');
-updateQueueBadge();
-flushQueue();                       // resend anything queued from a prior offline session
+updateExportBadge();
+// Repaint the stored (not-yet-exported) scans so a reload doesn't look like data loss.
+scanLog.slice(-80).forEach((r, i, arr) => logRow(true, r.sku, (r.mode==='receive'?'+':'set ')+r.qty, '#'+(scanLog.length-arr.length+i+1)));
 (NATIVE && MLKit) ? startNativeScan() : startScanner();   // native ML Kit scanner in the app; web BarcodeDetector elsewhere
 
 /* ---- Register the service worker (offline app shell; powers the installable PWA/APK) ---- */
