@@ -1,3 +1,10 @@
+> **SUPERSEDED — do not deploy (2026-09-30).** This app was never deployed. The store runs **Shopify POS Lite**,
+> which never runs automatic discounts (app/Function discounts included) and refuses discount combinations, so this
+> automatic discount would do nothing at the register, exactly like the existing online pin deal. The POS pin deal
+> now lives in the `spooky-discounts` app as the `pin-deal-pos` smart grid tile (v14-v16), which applies the deal as a
+> custom cart discount that POS Lite allows. The online deal remains the `pin-deal-function` automatic discount in
+> that same app.
+
 # Spooky Pin Deal: Enamel Pins 4 for $20
 
 This is a Shopify discount app built on Shopify Functions. When a cart has 4 or
