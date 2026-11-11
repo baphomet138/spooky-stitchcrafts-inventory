@@ -135,6 +135,10 @@
       <button id="zoomIn" class="zbtn" aria-label="Zoom in">+</button>
     </div>
   </div>
+  <button id="importBtn" class="ctl">📥 Import catalog CSV</button>
+  <button id="catalogBtn" class="ctl">🔄 Update catalog</button>
+  <div id="catalogInfo" class="hint" style="margin:0 0 4px">catalog: loading…</div>
+  <input id="csvFile" type="file" accept=".csv,text/csv,text/comma-separated-values" hidden>
   <button id="waitReady" class="ctl">⏸️ Wait for Ready: Off</button>
   <div id="waitWrap">
     <div class="zoomlabel"><span>⏱️ Auto wait</span><span id="waitVal">30s</span></div>
@@ -196,10 +200,148 @@ const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
 function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn, torchLevel, flashMode })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
-/* ---- Product image/title lookup (sku-map.json, generated from Shopify) ---- */
+/* ---- Product catalog (sku-map.json: SKU -> title+image, barcode -> SKU alias) ----
+   The APK bundles a copy, but the catalog changes every time products/barcodes/images do, and
+   rebuilding + reinstalling the APK for that is absurd. So the map is fetched from the public
+   Pages copy and cached in localStorage: new products reach the phone by pushing sku-map.json to
+   the repo, no rebuild. Order of preference on boot: cache (instant, works offline) -> bundled
+   copy (first run) -> then a background refresh from the network that supersedes both. ---- */
+const CATALOG_URL = 'https://baphomet138.github.io/spooky-stitchcrafts-inventory/sku-map.json';
 let SKU_MAP = {}, IMG_BASE = '', SKU_ALIAS = {};
-fetch('sku-map.json').then(r=>r.json()).then(d=>{ SKU_MAP = d.map||{}; IMG_BASE = d._base||''; SKU_ALIAS = d.alias||{}; })
-  .catch(()=>{ $('pvName').textContent = '(sku-map.json not found — image preview off)'; });
+let catalogGenerated = 0;    // age of the catalog currently in use — guards against a stale overwrite
+const catalogAge = d => Date.parse((d && d._generated) || '') || 0;   // undated == ancient
+function applyCatalog(d, src){
+  if(!d || !d.map) return false;
+  SKU_MAP = d.map; IMG_BASE = d._base || ''; SKU_ALIAS = d.alias || {};
+  catalogGenerated = catalogAge(d);
+  const when = (d._generated || '').slice(0,10);
+  $('catalogInfo').textContent = 'catalog: ' + Object.keys(SKU_MAP).length + ' SKUs'
+    + (when ? ', built ' + when : '') + ' (' + src + ')';
+  return true;
+}
+/* ---- Import a Shopify product CSV export straight on the phone ----
+   Shopify Admin -> Products -> Export -> **Plain CSV file** (NOT the "for Excel/Numbers" option:
+   that one prefixes every all-numeric SKU and barcode with an apostrophe — 171 of our barcodes —
+   which would silently break barcode lookups. We strip a leading ' anyway so the wrong export
+   degrades instead of failing quietly). Shopify emails the export, so this needs no PC, no cable,
+   no API token: open the mail on the phone, save the CSV, import it here. The export is Admin-side,
+   so unlike the public storefront it INCLUDES unpublished/draft products — which is most of what
+   gets scanned at receiving. ---- */
+function parseCsv(text){
+  // Full RFC4180 parse — the Body (HTML) column carries commas, quotes AND newlines inside quotes,
+  // so splitting on lines or commas mangles the file.
+  const rows = []; let row = [], field = '', q = false;
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);          // strip BOM
+  for(let i = 0; i < text.length; i++){
+    const c = text[i];
+    if(q){
+      if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else q = false; }
+      else field += c;
+    } else if(c === '"'){ q = true; }
+    else if(c === ','){ row.push(field); field = ''; }
+    else if(c === '\n'){ row.push(field); field = ''; rows.push(row); row = []; }
+    else if(c !== '\r'){ field += c; }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows;
+}
+function catalogFromCsv(text){
+  const rows = parseCsv(text);
+  if(!rows.length) throw new Error('empty file');
+  const head = rows[0].map(h => h.trim());
+  const col = {};
+  ['Handle','Title','Variant SKU','Variant Barcode','Variant Barcodes','Image Src','Image Position','Variant Image']
+    .forEach(n => col[n] = head.indexOf(n));
+  // Shopify renamed the column to "Variant Barcodes" when variants gained multiple barcodes
+  // (2026-11). Accept either name.
+  if(col['Variant Barcode'] < 0) col['Variant Barcode'] = col['Variant Barcodes'];
+  if(col['Handle'] < 0 || col['Variant SKU'] < 0){
+    throw new Error("not a Shopify product export (no Handle/Variant SKU column)");
+  }
+  const at = (r, n) => (col[n] >= 0 && r[col[n]] != null) ? String(r[col[n]]).trim() : '';
+  const clean = v => v.replace(/^'/, '');       // undo the Excel-export apostrophe if present
+  const title = {}, feat = {};
+  for(let i = 1; i < rows.length; i++){
+    const r = rows[i], h = at(r, 'Handle');
+    if(!h) continue;
+    const t = at(r, 'Title');
+    if(t && !(h in title)) title[h] = t;
+    const img = at(r, 'Image Src');
+    if(img && at(r, 'Image Position') === '1' && !(h in feat)) feat[h] = img;
+  }
+  const map = {}, alias = {};
+  for(let i = 1; i < rows.length; i++){
+    const r = rows[i], h = at(r, 'Handle');
+    const sku = clean(at(r, 'Variant SKU'));
+    if(!h || !sku) continue;
+    const url = at(r, 'Variant Image') || feat[h] || '';
+    if(!url) continue;
+    // Full URLs are stored with an empty _base (the fetched map instead stores basenames + a CDN base).
+    map[sku] = [title[h] || '', url.split('?')[0]];
+    // One cell can hold several barcodes, "; "-separated (e.g. "810155191252; 3804" = vendor UPC +
+    // old in-house code). Split on ';' ONLY — some pin barcodes contain spaces. Every code resolves
+    // to the same canonical SKU.
+    at(r, 'Variant Barcode').split(';').forEach(part => {
+      const bc = clean(part.trim()).trim();
+      if(bc && bc !== sku) alias[bc] = sku;
+    });
+  }
+  if(!Object.keys(map).length) throw new Error('no SKUs found in that file');
+  return { _base: '', _note: 'Imported from a Shopify product CSV export.', _generated: new Date().toISOString(), map, alias };
+}
+$('importBtn').onclick = ()=> $('csvFile').click();
+$('csvFile').addEventListener('change', async (e)=>{
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';                                   // allow re-picking the same file later
+  if(!f) return;
+  $('importBtn').disabled = true; $('importBtn').textContent = '📥 Importing…';
+  try{
+    const d = catalogFromCsv(await f.text());
+    applyCatalog(d, 'imported');
+    try{ localStorage.setItem('skuMapCache', JSON.stringify(d)); }catch(_){ }
+    showPreview(resolveSku($('sku').value.trim()));
+    status('Imported ' + Object.keys(d.map).length + ' SKUs, ' + Object.keys(d.alias).length + ' barcodes.');
+    closeDrawers();
+  }catch(err){
+    status('Import failed: ' + ((err && err.message) || err), true);
+  }finally{
+    $('importBtn').disabled = false; $('importBtn').textContent = '📥 Import catalog CSV';
+  }
+});
+
+async function refreshCatalog(manual){
+  if(manual){ $('catalogBtn').textContent = '🔄 Updating…'; $('catalogBtn').disabled = true; }
+  try{
+    const r = await fetch(CATALOG_URL + '?t=' + Date.now(), { cache:'no-store' });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if(!d || !d.map) throw new Error('bad catalog file');
+    // Never let a background fetch clobber a NEWER catalog — whether that came from a CSV import,
+    // the cache, OR the copy bundled in the APK (a fresh install has no cache yet, so comparing
+    // against localStorage alone silently downgraded new phones to the stale published map).
+    // Undated copies count as ancient. A manual tap still forces the remote version.
+    if(!manual && Object.keys(SKU_MAP).length && catalogGenerated > catalogAge(d)) return;
+    applyCatalog(d, 'updated');
+    try{ localStorage.setItem('skuMapCache', JSON.stringify(d)); }catch(_){ }   // may exceed quota; cache is optional
+    showPreview(resolveSku($('sku').value.trim()));            // re-resolve whatever is on screen
+    if(manual) status('Catalog updated — ' + Object.keys(SKU_MAP).length + ' SKUs.');
+  }catch(err){
+    // Offline or Pages down: whatever was loaded from cache/bundle stays in use.
+    if(manual) status('Catalog update failed (offline?) — using the stored copy.', true);
+  }finally{
+    if(manual){ $('catalogBtn').textContent = '🔄 Update catalog'; $('catalogBtn').disabled = false; }
+  }
+}
+$('catalogBtn').onclick = ()=> refreshCatalog(true);
+(function loadCatalog(){
+  let cached = null;
+  try{ cached = JSON.parse(localStorage.getItem('skuMapCache')||'null'); }catch(_){ }
+  if(applyCatalog(cached, 'stored')) refreshCatalog(false);
+  else fetch('sku-map.json').then(r=>r.json())
+    .then(d=>{ applyCatalog(d, 'bundled'); })
+    .catch(()=>{ $('catalogInfo').textContent = 'catalog: none bundled'; $('pvName').textContent = '(no catalog — image preview off)'; })
+    .finally(()=> refreshCatalog(false));
+})();
 // A scanned/typed code may be the printed BARCODE (Shopify variant.barcode), which often differs
 // from the internal SKU (e.g. enamel pins have an 8-digit generated barcode, vendor imports have a
 // real UPC). Translate through the alias map so the preview AND the value logged to the sheet both
