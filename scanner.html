@@ -106,7 +106,7 @@
 <header><span style="font-size:20px">🦇</span><h1>Inventory Scanner</h1>
   <button id="installBtn" class="installbtn">📲 Install</button>
   <span id="queueBadge" class="qbadge" hidden>0 to export</span>
-  <span id="sessCount" class="sess">0 scanned</span>
+  <span id="sessCount" class="sess">0 today</span>
 </header>
 <div id="flash" class="flash"></div>
 <div id="imodal" class="imodal">
@@ -838,8 +838,17 @@ function onScan(sku){
 }
 
 /* ---- Session counter + success flash ---- */
-let sessCount = 0;
-function bumpCount(){ sessCount++; $('sessCount').textContent = sessCount+' scanned'; }
+// Header counter = scans logged TODAY (local date), computed from the saved log so it survives
+// closing/reopening the app. It used to be an in-memory session count that reset to "0 scanned" on
+// every launch, which looked like the previous day's scans had been wiped. The gold "N to export"
+// badge is the full on-device total.
+function updateTodayCount(){
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  const today = d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate());
+  const localDay = ts => { const t = new Date(ts); return t.getFullYear() + '-' + p(t.getMonth()+1) + '-' + p(t.getDate()); };
+  const n = scanLog.filter(r => localDay(r.ts) === today).length;
+  $('sessCount').textContent = n + ' today';
+}
 function flashOK(){ const f=$('flash'); f.classList.add('show'); setTimeout(()=>f.classList.remove('show'), 220); }
 
 /* ---- Local scan log (persisted in localStorage; survives reload/close) ---- */
@@ -850,6 +859,7 @@ function updateExportBadge(){
   const b = $('queueBadge');
   if(scanLog.length){ b.hidden = false; b.textContent = scanLog.length + ' to export'; } else b.hidden = true;
   $('undo').hidden = !scanLog.length;
+  updateTodayCount();
 }
 
 /* ---- Submit / logging (all local — nothing leaves the device) ---- */
@@ -863,7 +873,7 @@ function submit(){
   }
   scanLog.push({ ts: new Date().toISOString(), mode, sku, qty, note: $('bin').value.trim() });
   saveLog();
-  flashOK(); bumpCount();
+  flashOK();
   logRow(true, sku, (mode==='receive'?'+':'set ')+qty, '#'+scanLog.length);
   status('Logged — '+scanLog.length+' on device. Export when done.');
   if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
