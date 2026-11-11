@@ -100,6 +100,17 @@
   .undo{width:100%;margin-top:10px;padding:10px;font-size:14px;font-weight:600;border:1px solid #2a2138;border-radius:8px;background:var(--card);color:var(--text)}
   .undo:disabled{opacity:.5}
   .row.queued{border-left-color:var(--gold)} .row.undo{border-left-color:var(--muted)}
+  .row .nmq{font-weight:600}
+  .row .nmq.unknown{color:var(--bad)}
+  .row > div:first-child{min-width:0}
+  .suggest{background:var(--card);border:1px solid #2a2138;border-radius:8px;margin-top:4px;max-height:40vh;overflow:auto}
+  .suggest button{display:block;width:100%;text-align:left;padding:9px 10px;border:0;border-bottom:1px solid #2a2138;background:none;color:var(--text);font-size:13px}
+  .suggest button:last-child{border-bottom:0}
+  .suggest .sk{color:var(--muted);font-size:11px}
+  .suggest .more{text-align:center;color:var(--gold);font-weight:700}
+  .medit{display:flex;gap:8px}
+  .mbtn{padding:10px 14px;border:1px solid #2a2138;border-radius:8px;background:var(--bg);color:var(--text);font-weight:700;font-size:14px}
+  .mbtn.del{color:var(--bad);border-color:var(--bad)}
 </style>
 </head>
 <body>
@@ -114,6 +125,10 @@
     <img id="imodalImg" alt="">
     <div id="imodalName" class="nm"></div>
     <div id="imodalSku" class="sk"></div>
+    <div id="imodalEdit" class="medit" hidden>
+      <button id="imodalQty" class="mbtn">✏️ Change qty</button>
+      <button id="imodalDel" class="mbtn del">🗑 Remove</button>
+    </div>
     <button id="imodalClose" class="cls">Close</button>
   </div>
 </div>
@@ -172,7 +187,8 @@
     <div id="pvName" class="pvName">Scan or type a SKU…</div>
   </div>
   <label>SKU</label>
-  <input id="sku" placeholder="scan or type SKU" autocomplete="off">
+  <input id="sku" placeholder="scan, type SKU, or search by name" autocomplete="off">
+  <div id="suggest" class="suggest" hidden></div>
   <div class="qtyrow">
     <button id="minus">−</button>
     <input id="qty" type="number" inputmode="numeric" value="1">
@@ -184,6 +200,7 @@
   <div class="hint" id="status"></div>
   <button id="undo" class="undo" hidden>↩︎ Undo last scan</button>
   <button id="export" class="submit" style="background:var(--accent);color:#fff">📤 Export CSV</button>
+  <button id="reshare" class="undo" hidden>↻ Re-share last export</button>
 </div>
 
 <div class="log" id="log"></div>
@@ -301,6 +318,7 @@ $('csvFile').addEventListener('change', async (e)=>{
   try{
     const d = catalogFromCsv(await f.text());
     applyCatalog(d, 'imported');
+    renderLog();                                           // refresh product names in the scan list
     try{ localStorage.setItem('skuMapCache', JSON.stringify(d)); }catch(_){ }
     showPreview(resolveSku($('sku').value.trim()));
     status('Imported ' + Object.keys(d.map).length + ' SKUs, ' + Object.keys(d.alias).length + ' barcodes.');
@@ -317,7 +335,7 @@ $('csvFile').addEventListener('change', async (e)=>{
   try{ cached = JSON.parse(localStorage.getItem('skuMapCache')||'null'); }catch(_){ }
   if(applyCatalog(cached, 'stored')) return;
   fetch('sku-map.json').then(r=>r.json())                     // bundled first-run fallback only
-    .then(d=>{ applyCatalog(d, 'bundled'); })
+    .then(d=>{ applyCatalog(d, 'bundled'); renderLog(); })   // async: names arrive after the first render
     .catch(()=>{ $('catalogInfo').textContent = 'catalog: none — import a CSV'; $('pvName').textContent = '(no catalog — image preview off)'; });
 })();
 // A scanned/typed code may be the printed BARCODE (Shopify variant.barcode), which often differs
@@ -831,9 +849,9 @@ function onScan(sku){
   if(isKnownSku(sku)){ beep(); if(navigator.vibrate) navigator.vibrate(40); }
   else { buzz(); if(navigator.vibrate) navigator.vibrate([150, 80, 150, 80, 300]); }
   if(typeof flashOff === 'function') flashOff();   // a read succeeded → drop the flash burst
-  $('sku').value = sku;
+  $('sku').value = sku; hideSuggest();
   showPreview(sku);
-  if(mode==='receive') submit();        // receiving: auto-add on each scan
+  if(mode==='receive') submit();       // receiving: auto-add on each scan
   else $('qty').focus();                 // count: let them type the number
 }
 
@@ -874,62 +892,199 @@ function submit(){
   scanLog.push({ ts: new Date().toISOString(), mode, sku, qty, note: $('bin').value.trim() });
   saveLog();
   flashOK();
-  logRow(true, sku, (mode==='receive'?'+':'set ')+qty, '#'+scanLog.length);
+  renderLog();
+  hideSuggest();
   status('Logged — '+scanLog.length+' on device. Export when done.');
   if(mode==='receive'){ $('qty').value=1; $('sku').value=''; showPreview(''); }
 }
 $('submit').onclick = submit;
 $('sku').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
-$('sku').addEventListener('input', e=>{ showPreview(resolveSku(e.target.value.trim())); });
+$('sku').addEventListener('input', e=>{
+  const v = e.target.value.trim();
+  showPreview(resolveSku(v));
+  updateSuggest(v);
+});
+
+/* ---- Search by product name: type part of a name (or SKU) and tap a match. Shown only when what's
+   typed isn't already an exact SKU/barcode, so scanning and exact entry are unaffected. ---- */
+function hideSuggest(){ const s = $('suggest'); s.hidden = true; s.textContent = ''; }
+// Optimal-string-alignment distance (Levenshtein + adjacent swaps), capped: returns max+1 early.
+function editDist(a, b, max){
+  if(Math.abs(a.length - b.length) > max) return max + 1;
+  let p2 = null, p1 = Array.from({length: b.length + 1}, (_, j) => j);
+  for(let i = 1; i <= a.length; i++){
+    const cur = [i]; let rowMin = i;
+    for(let j = 1; j <= b.length; j++){
+      let d = Math.min(p1[j] + 1, cur[j-1] + 1, p1[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+      if(p2 && i > 1 && j > 1 && a[i-1] === b[j-2] && a[i-2] === b[j-1]) d = Math.min(d, p2[j-2] + 1);
+      cur.push(d); if(d < rowMin) rowMin = d;
+    }
+    if(rowMin > max) return max + 1;
+    p2 = p1; p1 = cur;
+  }
+  return p1[b.length];
+}
+// Score one typed word against a product: 3 = whole word, 2 = word starts with it, 1 = appears
+// inside the text, 0.5 = one typo away from a word (typed words of 4+ letters only), 0 = no match.
+function wordScore(tok, words, hay, fuzzy){
+  let best = 0;
+  for(const w of words){
+    if(w === tok) return 3;
+    if(w.startsWith(tok)) best = Math.max(best, 2);
+  }
+  if(best) return best;
+  if(hay.includes(tok)) return 1;
+  if(fuzzy && tok.length >= 4){
+    for(const w of words){
+      // compare against the whole word, and against its start (so a typo in a half-typed word still hits)
+      if(editDist(tok, w, 1) <= 1 || (w.length > tok.length && editDist(tok, w.slice(0, tok.length), 1) <= 1)) return 0.5;
+    }
+  }
+  return 0;
+}
+// Every typed word must match (any order). Results ranked best-first, then alphabetically.
+// Typo matching is a FALLBACK per word: used only when that word matches nothing exactly anywhere
+// in the catalog (so "moth" doesn't drag in "goth", but "mothamn" still finds Mothman), and never
+// for words containing digits (SKU numbers must match exactly).
+function searchCatalog(q){
+  const toks = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if(!toks.length) return [];
+  const items = [];
+  for(const sku in SKU_MAP){
+    const title = SKU_MAP[sku][0] || '';
+    const hay = (title + ' ' + sku).toLowerCase();
+    items.push([sku, title, hay, hay.split(/[^a-z0-9]+/).filter(Boolean)]);
+  }
+  const fuzzy = toks.map(t => !/\d/.test(t) && !items.some(it => wordScore(t, it[3], it[2], false)));
+  const out = [];
+  for(const [sku, title, hay, words] of items){
+    let total = 0, ok = true;
+    for(let i = 0; i < toks.length; i++){
+      const s = wordScore(toks[i], words, hay, fuzzy[i]); if(!s){ ok = false; break; } total += s;
+    }
+    if(ok) out.push([sku, title, total]);
+  }
+  out.sort((x, y) => y[2] - x[2] || x[1].localeCompare(y[1]) || x[0].localeCompare(y[0]));
+  return out;
+}
+const SUGGEST_PAGE = 30;
+let suggestHits = [], suggestShown = 0;
+function renderSuggestPage(){
+  const s = $('suggest');
+  const old = s.querySelector('.more'); if(old) old.remove();
+  const end = Math.min(suggestHits.length, suggestShown + SUGGEST_PAGE);
+  for(let i = suggestShown; i < end; i++){
+    const [sku, title] = suggestHits[i];
+    const b = document.createElement('button'); b.type = 'button';
+    const t = document.createElement('div'); t.textContent = title || sku;
+    const k = document.createElement('div'); k.className = 'sk'; k.textContent = sku;
+    b.appendChild(t); b.appendChild(k);
+    b.onclick = ()=>{ $('sku').value = sku; showPreview(sku); hideSuggest(); };
+    s.appendChild(b);
+  }
+  suggestShown = end;
+  const left = suggestHits.length - suggestShown;
+  if(left > 0){
+    const m = document.createElement('button'); m.type = 'button'; m.className = 'more';
+    m.textContent = '⬇ Show ' + Math.min(left, SUGGEST_PAGE) + ' more (' + left + ' left)';
+    m.onclick = renderSuggestPage;
+    s.appendChild(m);
+  }
+}
+function updateSuggest(v){
+  const s = $('suggest');
+  if(v.length < 3 || SKU_MAP[resolveSku(v)]){ hideSuggest(); return; }
+  suggestHits = searchCatalog(v); suggestShown = 0;
+  s.textContent = '';
+  if(!suggestHits.length){ s.hidden = true; return; }
+  renderSuggestPage();
+  s.hidden = false; s.scrollTop = 0;
+  const n = suggestHits.length;
+  $('pvName').textContent = n + ' match' + (n === 1 ? '' : 'es') + ' — tap one below'
+    + (n > SUGGEST_PAGE ? ' (or keep typing to narrow)' : '');
+  $('pvName').className = 'pvName';
+}
 $('bin').addEventListener('input', savePrefs);
 
 /* ---- Undo last logged scan (local row removal) ---- */
 function undoLast(){
   if(!scanLog.length){ status('Nothing to undo', true); return; }
-  const r = scanLog.pop(); saveLog();
-  logRow('undo', r.sku, 'undo', 'removed #'+(scanLog.length+1));
-  status('Undid last scan ('+scanLog.length+' on device).');
+  const r = scanLog.pop(); saveLog(); renderLog();
+  status('Undid last scan: ' + productName(r.sku) + ' (' + scanLog.length + ' on device).');
 }
-$('undo').onclick = undoLast;
+// Undo sits right above Export, so a mis-tap is easy — confirm first (button only; undoLast() itself stays direct).
+$('undo').onclick = ()=>{
+  if(!scanLog.length){ status('Nothing to undo', true); return; }
+  const r = scanLog[scanLog.length - 1];
+  if(!confirm('Undo the last scan?\n\n#' + scanLog.length + '  ' + productName(r.sku) + '  (' + (r.mode === 'receive' ? '+' : 'set ') + r.qty + ')')) return;
+  undoLast();
+};
 
 /* ---- Export the scan log as CSV via the share sheet (Gmail / Drive / Sheets…).
    Native: Filesystem writes the file, Share hands it to Android's share sheet.
    Web fallback: Web Share API with a file, else a plain download. ---- */
 function csvEscape(v){ v = String(v == null ? '' : v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v; }
 function buildCsv(){
-  const lines = ['timestamp,mode,sku,qty,note'];
-  for(const r of scanLog) lines.push([r.ts, r.mode, r.sku, r.qty, r.note].map(csvEscape).join(','));
+  // product = catalog title at export time ('' when the code isn't in the catalog); bin = the
+  // Bin / Location field (stored as `note` on each row).
+  const lines = ['timestamp,mode,sku,product,qty,bin'];
+  for(const r of scanLog) lines.push([r.ts, r.mode, r.sku, (SKU_MAP[r.sku]||[''])[0], r.qty, r.note].map(csvEscape).join(','));
   return lines.join('\r\n') + '\r\n';
 }
 function csvName(){
   const d = new Date(), p = n => String(n).padStart(2,'0');
   return 'scans-' + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.csv';
 }
+async function shareCsv(csv, name){
+  const FS = NATIVE && CAP.Plugins && CAP.Plugins.Filesystem;
+  const SH = NATIVE && CAP.Plugins && CAP.Plugins.Share;
+  if(FS && SH){
+    await FS.writeFile({ path: name, data: csv, directory: 'CACHE', encoding: 'utf8' });
+    const { uri } = await FS.getUri({ path: name, directory: 'CACHE' });
+    await SH.share({ title: name, files: [uri] });          // Android share sheet → pick Gmail etc.
+  } else if(navigator.canShare && navigator.canShare({ files: [new File([csv], name, { type:'text/csv' })] })){
+    await navigator.share({ files: [new File([csv], name, { type:'text/csv' })], title: name });
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv' })); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+}
+const isCancel = err => err && (err.name === 'AbortError' || /cancel/i.test(String(err.message||'')));
+/* ---- Re-share last export: the last exported file is kept on the device (even after the scans are
+   cleared) so a failed email / wrong share target doesn't lose that batch. Replaced by the next export. ---- */
+let lastExport = null;
+try{ lastExport = JSON.parse(localStorage.getItem('lastExport')||'null'); }catch(_){ lastExport = null; }
+function updateReshare(){
+  const b = $('reshare');
+  if(lastExport && lastExport.csv){ b.hidden = false; b.textContent = '↻ Re-share last export (' + lastExport.n + ' scans, ' + lastExport.name + ')'; }
+  else b.hidden = true;
+}
+$('reshare').onclick = async ()=>{
+  if(!lastExport) return;
+  $('reshare').disabled = true;
+  try{ await shareCsv(lastExport.csv, lastExport.name); status('Re-shared ' + lastExport.name); }
+  catch(err){ if(isCancel(err)) status('Re-share cancelled.'); else status('Re-share failed: ' + ((err && err.message) || err), true); }
+  finally{ $('reshare').disabled = false; }
+};
 async function exportCsv(){
   if(!scanLog.length){ status('Nothing to export', true); return; }
   const csv = buildCsv(), name = csvName(), n = scanLog.length;
   $('export').disabled = true;
   try{
-    const FS = NATIVE && CAP.Plugins && CAP.Plugins.Filesystem;
-    const SH = NATIVE && CAP.Plugins && CAP.Plugins.Share;
-    if(FS && SH){
-      await FS.writeFile({ path: name, data: csv, directory: 'CACHE', encoding: 'utf8' });
-      const { uri } = await FS.getUri({ path: name, directory: 'CACHE' });
-      await SH.share({ title: name, files: [uri] });          // Android share sheet → pick Gmail etc.
-    } else if(navigator.canShare && navigator.canShare({ files: [new File([csv], name, { type:'text/csv' })] })){
-      await navigator.share({ files: [new File([csv], name, { type:'text/csv' })], title: name });
-    } else {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv' })); a.download = name;
-      document.body.appendChild(a); a.click(); a.remove();
-    }
+    await shareCsv(csv, name);
+    lastExport = { name, csv, n, at: new Date().toISOString() };
+    try{ localStorage.setItem('lastExport', JSON.stringify(lastExport)); }catch(_){ }
+    updateReshare();
     status('Exported '+n+' scan(s) — '+name);
-    if(confirm('Exported '+n+' scan(s).\nClear them from this device now?')){
-      scanLog = []; saveLog(); status('Scan log cleared — ready for the next batch.');
+    // Android can't tell us whether Gmail/Drive actually sent or saved — only that an app was picked —
+    // so ask the person, and say so. Re-share keeps a copy either way.
+    if(confirm('Did the email send / file save go through?\n\nOK = yes, clear these ' + n + ' scan(s) from this device.\nCancel = keep them here.\n\n(A copy stays under ↻ Re-share last export either way.)')){
+      scanLog = []; saveLog(); renderLog(); status('Scan log cleared — ready for the next batch. (↻ Re-share keeps a copy.)');
     }
   }catch(err){
     // Backing out of the share sheet rejects — that's a cancel, not a failure.
-    if(err && (err.name === 'AbortError' || /cancel/i.test(String(err.message||'')))) status('Export cancelled.');
+    if(isCancel(err)) status('Export cancelled.');
     else status('Export failed: ' + ((err && err.message) || err), true);
   }finally{
     $('export').disabled = false;
@@ -938,28 +1093,41 @@ async function exportCsv(){
 $('export').onclick = exportCsv;
 
 function status(msg, bad){ const s=$('status'); s.textContent=msg; s.className = 'hint'+(bad?' err':''); }
-function logRow(ok, sku, qty, note){
-  const cls = ok===true ? 'ok' : ok==='queued' ? 'queued' : ok==='undo' ? 'undo' : 'bad';
-  const d=document.createElement('div'); d.className='row '+cls; d.dataset.sku = sku || '';
-  const left=document.createElement('div');
-  const q=document.createElement('div'); q.textContent = qty;
-  const s=document.createElement('div'); s.className='q'; s.textContent = sku;
-  left.appendChild(q); left.appendChild(s);
-  const right=document.createElement('div'); right.className='rrow';
-  const n=document.createElement('div'); n.className='q'; n.textContent = note;
-  const v=document.createElement('div'); v.className='view'; v.textContent = '🔍';   // tap row → product image
-  right.appendChild(n); right.appendChild(v);
-  d.appendChild(left); d.appendChild(right);
-  const log=$('log'); log.prepend(d);
-  while(log.children.length > 80) log.removeChild(log.lastChild);   // cap DOM growth over long sessions
+const productName = sku => (SKU_MAP[sku] && SKU_MAP[sku][0]) || 'Not in catalog';
+/* ---- Scan list = a straight render of the saved scanLog (newest first, last 80), so a row always
+   matches a real saved scan and can be edited/removed by its index. ---- */
+function renderLog(){
+  const log = $('log'); log.textContent = '';
+  const start = Math.max(0, scanLog.length - 80);
+  for(let i = scanLog.length - 1; i >= start; i--){
+    const r = scanLog[i], known = !!SKU_MAP[r.sku];
+    const d = document.createElement('div'); d.className = 'row ' + (known ? 'ok' : 'bad');
+    d.dataset.sku = r.sku || ''; d.dataset.idx = i;
+    const left = document.createElement('div');
+    const nm = document.createElement('div'); nm.className = 'nmq' + (known ? '' : ' unknown');
+    nm.textContent = (r.mode === 'receive' ? '+' : 'set ') + r.qty + '  ' + productName(r.sku);
+    const s = document.createElement('div'); s.className = 'q';
+    s.textContent = r.sku + (r.note ? ' · ' + r.note : '');
+    left.appendChild(nm); left.appendChild(s);
+    const right = document.createElement('div'); right.className = 'rrow';
+    const n = document.createElement('div'); n.className = 'q'; n.textContent = '#' + (i + 1);
+    const v = document.createElement('div'); v.className = 'view'; v.textContent = '🔍';   // tap row → image + edit
+    right.appendChild(n); right.appendChild(v);
+    d.appendChild(left); d.appendChild(right);
+    log.appendChild(d);
+  }
 }
 
-/* ---- Tap a logged row to view that product's image (from sku-map.json) ---- */
+/* ---- Tap a logged row: product image + change qty / remove that scan ---- */
 let modalOpen = false;   // pauses camera detection while the image popup is open
-function openImageModal(sku){
+let modalIdx = -1;       // index into scanLog of the row being viewed
+function openImageModal(sku, idx){
+  modalIdx = (idx != null && scanLog[idx]) ? idx : -1;
+  $('imodalEdit').hidden = modalIdx < 0;
   const rec = sku && SKU_MAP[sku];
   const img=$('imodalImg'), nm=$('imodalName');
-  $('imodalSku').textContent = sku || '';
+  const lr = modalIdx >= 0 ? scanLog[modalIdx] : null;
+  $('imodalSku').textContent = (sku || '') + (lr ? '  ·  #' + (modalIdx + 1) + '  ·  ' + (lr.mode === 'receive' ? '+' : 'set ') + lr.qty + (lr.note ? '  ·  ' + lr.note : '') : '');
   img.onerror = ()=>{ img.style.display='none'; };
   if(rec){
     img.style.display='block'; img.src = IMG_BASE + rec[1];
@@ -971,10 +1139,30 @@ function openImageModal(sku){
   modalOpen = true;                       // pause scanning while viewing
   $('imodal').classList.add('show');
 }
-function closeImageModal(){ modalOpen = false; $('imodal').classList.remove('show'); }
+function closeImageModal(){ modalOpen = false; modalIdx = -1; $('imodal').classList.remove('show'); }
 $('imodalClose').onclick = closeImageModal;
 $('imodal').addEventListener('click', e=>{ if(e.target===$('imodal')) closeImageModal(); });
-$('log').addEventListener('click', e=>{ const r=e.target.closest('.row'); if(r) openImageModal(r.dataset.sku); });
+$('log').addEventListener('click', e=>{
+  const r = e.target.closest('.row');
+  if(r) openImageModal(r.dataset.sku, r.dataset.idx != null ? parseInt(r.dataset.idx, 10) : null);
+});
+$('imodalQty').onclick = ()=>{
+  const r = scanLog[modalIdx]; if(!r) return;
+  const v = prompt('Quantity for #' + (modalIdx + 1) + ' ' + productName(r.sku) + ':', r.qty);
+  if(v == null) return;                                       // cancelled
+  const q = parseInt(v, 10);
+  if(isNaN(q)){ status('Not changed — "' + v + '" is not a number.', true); return; }
+  const was = r.qty; r.qty = q; saveLog(); renderLog();
+  status('#' + (modalIdx + 1) + ' qty ' + was + ' → ' + q + '.');
+  closeImageModal();
+};
+$('imodalDel').onclick = ()=>{
+  const r = scanLog[modalIdx]; if(!r) return;
+  if(!confirm('Remove scan #' + (modalIdx + 1) + ' (' + productName(r.sku) + ', ' + (r.mode === 'receive' ? '+' : 'set ') + r.qty + ')?')) return;
+  scanLog.splice(modalIdx, 1); saveLog(); renderLog();
+  status('Removed ' + productName(r.sku) + ' (' + scanLog.length + ' on device).');
+  closeImageModal();
+};
 
 /* ---- Init from saved preferences ---- */
 $('bin').value = PREF.bin || '';
@@ -984,7 +1172,8 @@ setMode(mode);                      // mode already = PREF.mode || 'receive'
 setScanMode(PREF.scanMode || 'tap');
 updateExportBadge();
 // Repaint the stored (not-yet-exported) scans so a reload doesn't look like data loss.
-scanLog.slice(-80).forEach((r, i, arr) => logRow(true, r.sku, (r.mode==='receive'?'+':'set ')+r.qty, '#'+(scanLog.length-arr.length+i+1)));
+renderLog();
+updateReshare();
 (NATIVE && MLKit) ? startNativeScan() : startScanner();   // native ML Kit scanner in the app; web BarcodeDetector elsewhere
 
 /* ---- Register the service worker (offline app shell; powers the installable PWA/APK) ---- */
