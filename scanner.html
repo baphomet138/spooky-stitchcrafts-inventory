@@ -70,6 +70,7 @@
   .row.ok{border-left-color:var(--ok)} .row.bad{border-left-color:var(--bad)}
   .row .q{color:var(--muted);font-size:11px}
   .hint{color:var(--muted);font-size:11px;margin:4px 12px 0}
+  #catalogInfo.stale{color:var(--gold);font-weight:700}
   .err{color:var(--bad)}
   .preview{display:flex;align-items:center;gap:10px;margin-bottom:8px}
   #pvImg{width:48px;height:48px;object-fit:contain;background:#fff;border-radius:6px;display:none;flex:none}
@@ -136,7 +137,6 @@
     </div>
   </div>
   <button id="importBtn" class="ctl">📥 Import catalog CSV</button>
-  <button id="catalogBtn" class="ctl">🔄 Update catalog</button>
   <div id="catalogInfo" class="hint" style="margin:0 0 4px">catalog: loading…</div>
   <input id="csvFile" type="file" accept=".csv,text/csv,text/comma-separated-values" hidden>
   <button id="waitReady" class="ctl">⏸️ Wait for Ready: Off</button>
@@ -200,25 +200,28 @@ const PREF = JSON.parse(localStorage.getItem('scanPrefs')||'{}');
 function savePrefs(){ try{ localStorage.setItem('scanPrefs', JSON.stringify({ mode, scanMode, zoom: $('zoom').value, bin: $('bin').value, autoWait: AUTO_PAUSE_SECS, waitForReady, macro: macroOn, torchLevel, flashMode })); }catch(_){ } }
 let mode = PREF.mode || 'receive';
 
-/* ---- Product catalog (sku-map.json: SKU -> title+image, barcode -> SKU alias) ----
-   The APK bundles a copy, but the catalog changes every time products/barcodes/images do, and
-   rebuilding + reinstalling the APK for that is absurd. So the map is fetched from the public
-   Pages copy and cached in localStorage: new products reach the phone by pushing sku-map.json to
-   the repo, no rebuild. Order of preference on boot: cache (instant, works offline) -> bundled
-   copy (first run) -> then a background refresh from the network that supersedes both. ---- */
-const CATALOG_URL = 'https://baphomet138.github.io/spooky-stitchcrafts-inventory/sku-map.json';
+/* ---- Product catalog (SKU -> title+image, barcode -> SKU alias) ----
+   The ONLY way to update it is the on-phone CSV import below (owner decision 2026-11-11). The
+   imported catalog is cached in localStorage; the copy bundled in the APK is just a first-run
+   fallback. No network fetch of the catalog anymore. ---- */
 let SKU_MAP = {}, IMG_BASE = '', SKU_ALIAS = {};
-let catalogGenerated = 0;    // age of the catalog currently in use — guards against a stale overwrite
-const catalogAge = d => Date.parse((d && d._generated) || '') || 0;   // undated == ancient
 function applyCatalog(d, src){
   if(!d || !d.map) return false;
   SKU_MAP = d.map; IMG_BASE = d._base || ''; SKU_ALIAS = d.alias || {};
-  catalogGenerated = catalogAge(d);
   const when = (d._generated || '').slice(0,10);
-  $('catalogInfo').textContent = 'catalog: ' + Object.keys(SKU_MAP).length + ' SKUs'
-    + (when ? ', built ' + when : '') + ' (' + src + ')';
+  // Catalog age nudge: CSV import is the only update path, so an old import is the usual reason a
+  // new product's barcode doesn't resolve. Gold + a one-line status hint once it passes CATALOG_STALE_DAYS.
+  const age = d._generated ? Math.floor((Date.now() - Date.parse(d._generated)) / 86400000) : null;
+  const stale = age == null || age >= CATALOG_STALE_DAYS;
+  const ageTxt = age == null ? 'age unknown' : age === 0 ? 'today' : age === 1 ? '1 day ago' : age + ' days ago';
+  $('catalogInfo').textContent = 'catalog: ' + Object.keys(SKU_MAP).length + ' SKUs, '
+    + (src === 'bundled' ? 'built-in copy' : 'imported') + ' ' + ageTxt + (when ? ' (' + when + ')' : '')
+    + (stale ? ' — import a fresh CSV' : '');
+  $('catalogInfo').classList.toggle('stale', stale);
+  if(stale && src !== 'imported') setTimeout(()=> status('Catalog is ' + ageTxt.replace(' ago','') + ' old — import a fresh Shopify CSV (🔦 Tools).', true), 0);
   return true;
 }
+const CATALOG_STALE_DAYS = 14;
 /* ---- Import a Shopify product CSV export straight on the phone ----
    Shopify Admin -> Products -> Export -> **Plain CSV file** (NOT the "for Excel/Numbers" option:
    that one prefixes every all-numeric SKU and barcode with an apostrophe — 171 of our barcodes —
@@ -309,38 +312,13 @@ $('csvFile').addEventListener('change', async (e)=>{
   }
 });
 
-async function refreshCatalog(manual){
-  if(manual){ $('catalogBtn').textContent = '🔄 Updating…'; $('catalogBtn').disabled = true; }
-  try{
-    const r = await fetch(CATALOG_URL + '?t=' + Date.now(), { cache:'no-store' });
-    if(!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    if(!d || !d.map) throw new Error('bad catalog file');
-    // Never let a background fetch clobber a NEWER catalog — whether that came from a CSV import,
-    // the cache, OR the copy bundled in the APK (a fresh install has no cache yet, so comparing
-    // against localStorage alone silently downgraded new phones to the stale published map).
-    // Undated copies count as ancient. A manual tap still forces the remote version.
-    if(!manual && Object.keys(SKU_MAP).length && catalogGenerated > catalogAge(d)) return;
-    applyCatalog(d, 'updated');
-    try{ localStorage.setItem('skuMapCache', JSON.stringify(d)); }catch(_){ }   // may exceed quota; cache is optional
-    showPreview(resolveSku($('sku').value.trim()));            // re-resolve whatever is on screen
-    if(manual) status('Catalog updated — ' + Object.keys(SKU_MAP).length + ' SKUs.');
-  }catch(err){
-    // Offline or Pages down: whatever was loaded from cache/bundle stays in use.
-    if(manual) status('Catalog update failed (offline?) — using the stored copy.', true);
-  }finally{
-    if(manual){ $('catalogBtn').textContent = '🔄 Update catalog'; $('catalogBtn').disabled = false; }
-  }
-}
-$('catalogBtn').onclick = ()=> refreshCatalog(true);
 (function loadCatalog(){
   let cached = null;
   try{ cached = JSON.parse(localStorage.getItem('skuMapCache')||'null'); }catch(_){ }
-  if(applyCatalog(cached, 'stored')) refreshCatalog(false);
-  else fetch('sku-map.json').then(r=>r.json())
+  if(applyCatalog(cached, 'stored')) return;
+  fetch('sku-map.json').then(r=>r.json())                     // bundled first-run fallback only
     .then(d=>{ applyCatalog(d, 'bundled'); })
-    .catch(()=>{ $('catalogInfo').textContent = 'catalog: none bundled'; $('pvName').textContent = '(no catalog — image preview off)'; })
-    .finally(()=> refreshCatalog(false));
+    .catch(()=>{ $('catalogInfo').textContent = 'catalog: none — import a CSV'; $('pvName').textContent = '(no catalog — image preview off)'; });
 })();
 // A scanned/typed code may be the printed BARCODE (Shopify variant.barcode), which often differs
 // from the internal SKU (e.g. enamel pins have an 8-digit generated barcode, vendor imports have a
@@ -835,8 +813,23 @@ function beep(){
   }catch(_){ }
 }
 
+// Unknown-code alert: a code that isn't a catalog SKU (after barcode->SKU resolution) gets a low
+// double buzz instead of the normal beep, and Submit asks before logging it raw.
+const isKnownSku = sku => !Object.keys(SKU_MAP).length || !!SKU_MAP[sku];   // no catalog loaded = don't nag
+function buzz(){
+  const a = ensureAudio(); if(!a) return;
+  try{
+    [0, 0.2].forEach(t => {
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = 'sawtooth'; o.frequency.value = 180; g.gain.value = 0.22;
+      o.connect(g); g.connect(a.destination);
+      o.start(a.currentTime + t); o.stop(a.currentTime + t + 0.15);
+    });
+  }catch(_){ }
+}
 function onScan(sku){
-  beep(); if(navigator.vibrate) navigator.vibrate(40);
+  if(isKnownSku(sku)){ beep(); if(navigator.vibrate) navigator.vibrate(40); }
+  else { buzz(); if(navigator.vibrate) navigator.vibrate([150, 80, 150, 80, 300]); }
   if(typeof flashOff === 'function') flashOff();   // a read succeeded → drop the flash burst
   $('sku').value = sku;
   showPreview(sku);
@@ -865,6 +858,9 @@ function submit(){
   const qty = parseInt($('qty').value, 10);
   if(!sku){ status('Enter or scan a SKU', true); return; }
   if(isNaN(qty)){ status('Enter a quantity', true); return; }
+  if(!isKnownSku(sku) && !confirm('"' + sku + '" is not in the catalog.\n\nLog it anyway?')){
+    status('Not logged — "' + sku + '" is not in the catalog.', true); return;
+  }
   scanLog.push({ ts: new Date().toISOString(), mode, sku, qty, note: $('bin').value.trim() });
   saveLog();
   flashOK(); bumpCount();
